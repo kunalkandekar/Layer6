@@ -1,0 +1,17 @@
+_ref/
+build/*
+dist/*
+*.o
+*.dSYM/
+*.class
+*.jar
+*.so
+*.exe
+*.dll
+classes/
+.DS_Store
+.*
+*.pyc
+src/python/*.pyc
+!.gitignore
+

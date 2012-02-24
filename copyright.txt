@@ -1,0 +1,17 @@
+All code authored by Kunal Kandekar (unless specified otherwise.)
+Copyright 2002 - 2012
+
+License: Undecided as yet, but I'm leaning towards more permissive licenses like
+BSD, MIT or Apache. I'd like to choose a license which has the fewest incompati-
+bilities with other licensess like the GPL, or maybe multi-license it. Further, 
+I would like the specification to be more restrictively licensed to enforce 
+interoperability between any other implementations of the spec. However, I am 
+not sure if it's sensible, advisable or even possible to license the spec under
+a different license than the code, and what that would mean. 
+
+Basically, at this time I am not informed enough to make the right choice. 
+
+In the meantime, if you wish to use this code for experimentation, feel free to
+do so, with the understanding that I hold no liabilities. If you wish to use the
+code for any other reason, feel free to contact me at: kunalkandekar@gmail.com. 
+Maybe you could help me reach a good decision!

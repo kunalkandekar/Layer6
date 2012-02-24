@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project name="layer6" default="all" basedir="./">
+    <property name="build.dir" value="build"/>
+    <property name="dist.dir" value="dist"/>
+    <property name="src.dir" value="src/java"/>
+    <property name="lib.dir" value="src/java"/>
+
+    <!-- property file="build.properties"/ -->
+
+    <path id="classpath.compile">
+        <fileset dir="${lib.dir}">
+            <include name="*.jar"/>
+        </fileset>
+        <path location="/System/Library/Java" />
+    </path>
+
+    <target name="mkdirs">
+        <!-- mkdir dir="${build.dir}"/ -->
+        <mkdir dir="${build.dir}/classes"/>
+        <mkdir dir="${dist.dir}"/>
+    </target>
+
+    <!-- compile -->
+    <target name="compile" depends="mkdirs">
+        <javac srcdir="${src.dir}" destdir="${build.dir}/classes" listfiles="yes" debug="true">
+            <classpath refid="classpath.compile"/>
+        </javac>
+        <jar destfile="${dist.dir}/layer6.jar" basedir="${build.dir}/classes">
+            <fileset dir="${build.dir}/classes">
+                <include name="**/*.class"/>
+            </fileset>
+                <fileset dir="${lib.dir}">
+                    <include name="**/*.jar"/>
+                </fileset>
+            <manifest>
+                <attribute name="Main-Class" value="org.layer6.test.Layer6Test"/>
+                <attribute name="Class-Path" value="./"/>
+            </manifest>
+        </jar>
+    </target>
+
+    <!--  populate the distribution directories -->
+    <target name="all" depends="compile"/>
+
+    <!-- clean the build dir -->
+    <target name="clean">
+        <delete dir="${build.dir}/classes" includeEmptyDirs="true"/>
+    </target>
+
+    <!-- nuke the build and dist directories -->
+    <target name="clobber">
+        <delete dir="${build.dir}/classes" includeEmptyDirs="true"/>
+        <delete dir="${dist.dir}" includeEmptyDirs="true"/>
+    </target>
+
+</project>
+

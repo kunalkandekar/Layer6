@@ -1,0 +1,499 @@
+                            Layer 6 Specification
+                            =====================
+                                   VER 0.7
+
+                             Copyright 2001 - 2012
+                            kunalkandekar@gmail.com
+
+Layer6 is a binary data representation format, serialization protocol and coll-
+ection of APIs for encoding structured data using dynamic, strongly typed, self-
+describing schemas. The main distinguishing features are:
+1. the self-describing message metadata, or "schema", is defined dynamically as
+   fields are added or removed programmatically (and hence need not be 
+   predefined by the user); 
+2. the self-describing metadata is maintained in a message header segment that 
+   is logically separated from and precedes the data segment. This enables the
+   potential for schema re-use for messages with repetitive formats. 
+   
+
+Specifically, the Layer6 message format includes the field type and layout 
+metadata (or "schemas") in a header segment that is segregated from and precedes
+the serialized field data segment. As such, it is possible for the message 
+metadata to be transmitted or persisted separately from the data, much like XML
+schemas.
+
+"Dynamic" means that the schema does not have to be predefined by the user, and
+hence separate .proto files or IDL files etc. are not needed. Instead, the 
+schema is dynamically defined as fields are programmatically added to, changed
+within, or removed from the message.
+
+
+The following is the specificiation detailing the formatting and layout of the 
+binary data format for serializing and deserializing messages.
+
+Note that the "user" as used herein refers to the application program (or in 
+some cases, the programmer implementing the program) that uses the Layer6 API 
+for writing, reading, serializing and deserialzing messages.
+
+
+1. GOALS
+========
+The main driving (and distinguishing) points behind its design are:
+* OS, platform and programming language agnostic.
+
+* Dynamic, "schema-less" formatting; that is, a user would not have to pre-
+  define a message schema (or layout) before embedding data in a message. The 
+  layout or schema would be dynamically defined as fields are added or removed
+  from a message. However, note that the spec does not prevent an alternate 
+  implementation from adding support for static/pre-defined schemas.
+
+* Separation of metadata from data. This allow the metadata of repeated schemas 
+  to be provided and/or extracted, and cached separately, so that subsequent 
+  messages may be sent and de-serialized without needing to be accompanied by 
+  their corresponding metadata. Hence the cached metadata can act as a static 
+  schema. This enables the potential for getting the best of both worlds: the 
+  flexibility of dynamic schemas and the  the performance of static 
+  schemas.
+
+* Automatic host and network byte-reordering (which can be disabled if no 
+  network messaging is involved, such as for local IPC or writing to disk.)
+
+There are also some explicit NON-goals:
+* This is NOT an RPC mechanism/API. 
+* This is NOT a message queue mechanism/API.
+Rather this only provides the data formatting functionality for use with other 
+RPC or messaging mechanisms. There may, however be some convenience methods 
+provided for basic messaging functionality, such as wrappers around basic 
+serialization or deserialization routines.
+
+
+2. OVERVIEW
+===========
+The basic unit of Layer6 is a "message." Each message contains one or more 
+"fields," which are independent, self-contained units of data. Fields can be 
+dynamically added, retrieved or removed individually. Fields can be addressed 
+using an index, an optional numeric ID or an optional alphanumeric string name. 
+Fields are addressed for the purposes of setting values, getting values or 
+being removed from the message.
+
+The index of a field is 0-indexed number specifying its position in the message 
+relative to other fields. It is governed by the order in which fields are added 
+to (or removed from) the message. That is, the first added field will be at 
+index 0, the second field will be at index 1, and so on. Note that removing a 
+field affects the indices of all fields following it, decrementing them by one.
+
+The field ID is a positive 2-byte number provided by the user for identifying a 
+field.
+
+The field name is a null-terminated ASCII string of maximum length 128 provided
+by the user for identifying a field.
+
+Note that the field ID and field name are optional, so the only mandatory method
+of addressing a field is via its index.
+
+The typical usage pattern for creating or writing a message is:
+ 1. Allocate message
+ 2. Set data field(s)
+ 3. Serialize to a buffer
+ 4. Write the buffer (to the network or disk)
+ 5. Free the message
+
+The typical usage pattern for reading a message is:
+ 1. Allocate message
+ 2. Read into a buffer (from the network or disk)
+ 3. Deserialize the buffer into the message
+ 4. Get data field(s)
+ 5. Free the message
+
+
+2.1. API Implementation
+-----------------------
+These are implementation details for any code or library that provides an API to 
+format data following this spec, and as such are mostly independent of the spec
+itself.
+
+The API provides means for the following actions:
+- Allocating and initializing a message;
+- Adding fields to a message (typically along with data values);
+- Setting data values for fields in a message;
+- Getting data values from fields in a message;
+- Removing fields from a message;
+- Serializing to a byte buffer, either fully or partially. Partially means:
+    + Serializing only the metadata (header) to a byte buffer;
+    + Serializing only the data to a byte buffer;
+- Deserializing from a byte buffer, either fully or partially. Partially means:
+    + Deserializing only the metadata (header) from a byte buffer;
+    + Deserializing only the data from a byte buffer;
+- Introspection of a message and its fields (i.e. querying message metadata);
+- Setting and getting various message configuration parameters;
+- Check for errors, in any, of the above actions, and provide details thereof.
+- Freeing a message;
+
+As mentioned above fields may be addressed during adding, setting or getting via
+an index or an optional numeric ID and an optional alphanumeric name. Access via
+index would be the fastest method of access, and it is the only mandatory means 
+of identifying fields. Hence any API would be required to provide for this 
+method of accessing fields.
+
+Settign and getting data in fields may be done by value or by reference (as 
+discussed subsequently.) An API may provide methods for setting and getting by 
+either or both ways.
+
+2.2. Message locking
+--------------------
+A message is "locked" to prevent further changes in its field data by the user.
+This is typically done automatically, for instance, just before serializing, so
+that a message may not be changed while the message is being serialized to a 
+buffer, which may leave it in an inconsistent state. A message may also be 
+locked when it is using a pre-defined template.
+
+2.3. By Reference and By Value
+------------------------------
+Setting data, getting data and removing of fields may be done by value or by 
+reference. Setting by value means that a copy of the user-provided data is made 
+and maintained in the field until the message is serialized or freed. Getting by
+value means that the field data in the message is copied and the copy is 
+returned to the user.
+
+Setting by reference means that only a reference (such as a pointer) to the 
+user-provided data is stored in the field until the message is serialized. Hence
+if the user changes the contents of the data pointed by the reference after 
+setting the reference but before serialization, what gets serialized will be 
+the different from what the data was when the user set a reference to it. 
+Getting by reference means that only a reference (such as a pointer) to the data
+in the field is returned to the user. Any changes made to the contents by the 
+user will affect the contents of the message itself.
+
+Setting and getting by reference is typically faster than by value, since it 
+avoids the overhead of copying to and fro. On the other hand, the semantics of 
+setting by value are easier to understand. The user may use either method of 
+access depending on the user's specific needs. However, for performance reasons,
+setting and getting by reference is recommended, since, as with all networking
+implementations, the lesser the copying of data, the greater the performance.
+
+Primitives are typically always set by value as it is almost always as efficient
+as setting a pointer, and simpler to manage as well. 
+
+
+3. MESSAGE FORMAT
+=================
+     0               1               2               3               
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |     CODE      |   NUM FIELDS  |   RESERVED    |   RESERVED    | 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |         TOTAL LENGTH          |        METADATA LENGTH        |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                   FIELD METADATA ....                         |
+    +-+-                            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                               |                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
+    |                    ... FIELD DATA ...                         |
+    +-+-                                                         -+-+
+    |                           .....                               |
+    +-+-                                                         -+-+
+    |                           .....                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+3.1. MESSAGE HEADER
+-------------------
+The message header contains the following fields:
+
+3.1.a. CODE:
+     0              
+     0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+
+    |Ver|T|USR|RESVD|
+    +-+-+-+-+-+-+-+-+
+Bits 0-2: Version number (currently v00)
+Bit    3: Template flag; Indicates metadata of this message should be used as 
+          template for future messages. Allows header compression for repetitive
+          messages. If this flag is set, the rest of the message header is 
+          decoded differently, as described in a subsequent section.
+          Not yet implemented
+Bits 3-4: User-settable bits
+Bits 5-7: Reserved for future use
+
+
+3.1.b. NUM FIELDS:
+Number of fields in the message. Restricted to 255 fields maximum for now.
+
+3.1.c. TOTAL LENGTH:
+The total length in 8-bit bytes of the message. Includes the header metadata,
+field metadata and field data.
+
+3.1.d. METADATA LENGTH:
+The metadata length in 8-bit bytes of the message. Includes only the length of 
+the header metadata and the field metadata.
+
+3.1.e. FIELD METADATA:
+A sequence of contiguous, variable-length structures representing field 
+metadata, including the type of the field data as well as any identifying 
+information. Thelength of field metadata bytes depends on the number of fields,
+their types, and other metadata provided.
+
+3.1.f. FIELD DATA:
+A sequence of contiguous, structures representing the field data. These can be
+fixed-length or variable-length depending on the data type of the field.
+
+
+3.2. FIELD METADATA FORMAT
+--------------------------
+Basic Field Metadata Format
+     0               1               2               
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |     TYPE      |     COUNT (TYPE-DEPENDENT)    |       
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |         FIELD ID (OPT)        | NAME LEN (OPT)|
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |               NAME (OPT)...                   |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    
+3.2.a. FIELD ID (OPT)
+Bytes marked (OPT) are optionally present, depending on the flags in the type 
+field.
+
+3.2.b. TYPE
+     0              
+     0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+
+    |-|I|N|X| DTYPE |
+    +-+-+-+-+-+-+-+-+
+Bit    0: Unused
+Bit    1: ID flag; indicates if the field has a numeric 2-byte ID associated 
+          with it. 
+Bit    2: NAME flag; indicates if field has a name, represented by an ASCII 
+          string, associated with it.
+Bit    3: EXTENSION flag; indicates if field is an extended data type.
+Bits 4-7: DATATYPE, the field data type, including primitives including signed 
+          and unsigned ints of 8-, 16- and 64-bit sizes, arrays of these 
+          primitive types, ASCII strings, and extension types. 
+
+3.2.b.i DATATYPE
+A 4-bit number identifying the data type of the field data. The MSB is currently
+unused, but in the future reserved for indicating custom types. 
+
+Data types are classified as "primitive" types (short, int, float etc.) and 
+"compound" types, such as arrays of primitives or embedded sub-messages. Floats 
+and doubles use the IEEE 754 representation. All other data types are in network 
+(big-endian) byte order by default, but this may be disabled by the user for 
+performance reasons if the data is not expected to be transmitted over the 
+network or be used on a platform with incompatible byte order.
+
+The following data types are supported in v1.0:
+Type                                        Layer 6 Name(s)         Layer6 code
+-------------------------------------------------------------------------------
+Signed 8-bit byte (int8_t/char)             L6_DATATYPE_BYTE                  2
+                                            L6_DATATYPE_INT8                  2
+Signed 16-bit int (int16_t/short)           L6_DATATYPE_INT16                 4
+                                            L6_DATATYPE_SHORT                 4
+Signed 32-bit int (int32_t/int)             L6_DATATYPE_INT32                 6
+                                            L6_DATATYPE_INT                   6
+Signed 64-bit int (int64_t/long)            L6_DATATYPE_INT64                 8
+                                            L6_DATATYPE_LONG                  8
+32-bit float (float)                        L6_DATATYPE_FLOAT                 9
+64-bit double (double)                      L6_DATATYPE_DOUBLE               10
+Null-terminated ASCII string                L6_DATATYPE_STRING               16
+Array of bytes (char[])                     L6_DATATYPE_BYTES                18
+                                            L6_DATATYPE_INT8_ARRAY           18
+Array of signed 16-bit bytes (int16_t[])    L6_DATATYPE_INT16_ARRAY          20
+                                            L6_DATATYPE_SHORT_ARRAY          20
+Array of signed 32-bit bytes (uint32_t[])   L6_DATATYPE_INT32_ARRAY          22
+                                            L6_DATATYPE_INT_ARRAY            22
+Array of signed 64-bit bytes (int64_t[])    L6_DATATYPE_INT64_ARRAY          24
+                                            L6_DATATYPE_LONG_ARRAY           24
+Array of 32-bit floats (float[])            L6_DATATYPE_FLOAT_ARRAY          25
+Array of 64-bit doubles (double[])          L6_DATATYPE_DOUBLE_ARRAY         26
+An embedded Layer6 sub-message              L6_DATATYPE_L6MSG                27
+
+
+The following data types (mostly unsigned versions of those above) are not 
+currently supported, by may be in a future release: 
+
+Type (C99 stdint.h type)                    Layer 6 Name(s)         Layer6 Code
+-------------------------------------------------------------------------------
+Unsigned 8-bit byte (uint8_t)               L6_DATATYPE_UNSIGNED_BYTE         1
+                                            L6_DATATYPE_UINT8                 1
+Unsigned 16-bit int (uint16_t)              L6_DATATYPE_UINT16                3
+                                            L6_DATATYPE_UNSIGNED_SHORT        3
+Unsigned 32-bit int (int32_t)               L6_DATATYPE_UINT32                5
+                                            L6_DATATYPE_UNSIGNED_INT          5
+Unsigned 64-bit int (int64_t)               L6_DATATYPE_UINT64                7
+                                            L6_DATATYPE_UNSIGNED_LONG         7
+Array of unsigned 8-bit bytes (uint8_t[])   L6_DATATYPE_UINT8_ARRAY          17
+                                            L6_DATATYPE_UNSIGNED_BYTES       17
+Array of unsigned 16-bit bytes (uint16_t[]) L6_DATATYPE_UINT16_ARRAY         19
+                                            L6_DATATYPE_UNSIGNED_SHORT_ARRAY 19
+Array of unsigned 32-bit bytes (uint32_t[]) L6_DATATYPE_UINT32_ARRAY         21
+                                            L6_DATATYPE_UNSIGNED_INT_ARRAY   21
+Array of unsigned 64-bit bytes (uint64_t[]) L6_DATATYPE_UINT64_ARRAY         23
+                                            L6_DATATYPE_UNSIGNED_LONG_ARRAY  23
+Unicode string in UTF-8 encoding            L6_DATATYPE_UTF8_STRING          28
+
+
+3.2.b.ii EXTENSION:
+A flag indicating that the field is an extended data type that is to be handled
+by the provided extended type handler methods.
+
+3.2.c. FIELD ID:
+An optional, user-defined 16-bit positive number in the range [0, 32767) 
+associated with the field, typically for identification purposes. If the ID flag
+is set in the TYPE field, the two bytes following the TYPE byte contain this 
+field ID.
+
+3.2.d. NAME LEN and NAME:
+An optional, user-defined, null-terminated ASCII string associated with the 
+field, typically for identification purposes. The maximum string length is 128. 
+If the NAME flag is set, the byte following the TYPE byte (or the bytes 
+containing the ID, if the ID flag is set as well) contains the length of the 
+name string (including the null terminator). Following the name length byte is 
+a null-terminated string of bytes of this length containing the string 
+representing the field name. Note that the null terminator fo the NAME string is
+included in the header, and that the NAME LEN field includes the null-terminator
+in its count.
+
+3.2.e. COUNT:
+A type-dependent unsigned, 2-byte number indicating the count of elements in the
+field data. This applies only to array and string data types, and is present 
+only if the DATATYPE bits in the TYPE byte indicates an array or string data 
+type. Note that string data types in the message body include the null 
+terminator, and the COUNT for string data types is inclusive of the null 
+terminator.
+
+
+3.3. MESSAGE BODY
+-----------------
+The serialized message body comprises the field data values arranged in the 
+order that the fields are defined in the header. The start of the message body 
+bytes within the buffer is determined by the METADATA LENGTH field in the 
+message header, and the message body starts exactly METADATA LENGTH bytes from
+the beginning of the buffer. Having the exact starting point of the field data 
+up front in the header makes it possible to deserialize the field data from the
+message body as soon as the metadata of each field is deserialized from the 
+header.
+
+The exact starting and ending offsets of the data for each field is exactly 
+defined by the field metadata in the header. For instance, the starting offset 
+of a field is defined by the sum of lengths of the data of all preceding fields,
+and the length of data for each field is determined by the count of elements 
+(which is 1 for primitive data types) multiplied by the size of each element 
+(for instance, 2 bytes for shorts, 4 bytes for ints, etc.) However, the start 
+and end offsets of each field data in the message body / buffer can also be 
+determined directly from the field metadata and the METADATA LENGTH field, as 
+long as the metadata of all previous fields have been parsed.
+
+Having precisely and statically defined data offsets and lengths in the body 
+once the header is parsed makes it fast to access and deserialize field values
+from the message body.
+
+
+Floats and doubles use the IEEE 754 representation. 
+
+Field data is stored in network byte order by default, but byte-reodering may be
+disabled if it is not needed, for example, when writing to disk instead of the
+network.
+
+String data types are serialized inclusive of their null terminators. As such,
+their field counts include the null terminator. This is actually the only real
+difference between the string and byte array data types; the string data type 
+provides a convenience method in dealing with strings, especially in languages 
+like C and C++.
+
+
+4. TEMPLATES
+============
+This enables functionality for defining and using predefined message layouts, or
+"schemas" as they are frequently called.
+
+*** Note that template specification is still work in progress, and may change 
+in future versions.
+
+4.1. Usage Pattern
+------------------
+Typical usage pattern for creating a message template is:
+- Allocate a message;
+- Add fields (optionally with data values);
+- Mark as a template with user-assigned template ID;
+- Serialize the message (or potentially only the metadata) to a byte buffer;
+- Transmit or persist the byte buffer to the network or disk;
+
+Note that marking as a template should lock the message, such that existing 
+fields (and their corresponding metadata) may not be changed or removed, and new
+fields may not be added.
+
+Typical usage pattern for using a pre-defined template to serialize data:
+- Obtain a message template from a previously transmitted or written message;
+- Allocate a message;
+- Apply the pre-defined message template to the newly allocated message;
+- Set field data values;
+- Serialize to a byte buffer;
+- Write the byte buffer to the network or disk;
+
+
+Typical usage pattern for using a pre-defined template to deserialize data:
+- Obtain a message template from a previously transmitted or written message;
+- Allocate a message;
+- Apply the pre-defined message template to the newly allocated message;
+- Read a byte buffer from a socket or file;
+- Use the templated message to deserialize field data values from the buffer;
+- Get field data values;
+
+
+4.2. Message Format for Templated Messages
+------------------------------------------
+If the Template flag is set, the rest of the message header and message data is
+decoded differently than usual. Specifically, the 2 bytes after the code byte 
+denote a Template ID, which is used to identify the appropriate, pre-cached 
+message header (presumably obtained in whole previously) that is to be applied
+in deserializing the data segment of the message.
+
+4.2.a. Template IDs
+A Template ID is a positive signed 16-bit number.
+
+4.2.b. Defining a Template
+The template flag in the message code field is set and the num fields is 
+non-zero, and the 2-byte user-specified template ID is appended after the 
+message header and before the field metadata. The field metadata is parsed as 
+usual and the internal schema / layout generated is associated with the template
+ID. 
+
+     0               1               2               3               
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |   |1|         |   NUM FIELDS  |   RESERVED    |   RESERVED    | 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |         TOTAL LENGTH          |        METADATA LENGTH        |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |          TEMPLATE ID          |                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                              -+
+    |                   ... FIELD METADATA ...                      |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                    ... FIELD DATA ...                         |
+    +-+-                                                         -+-+
+    |                           .....                               |
+    +-+-                                                         -+-+
+    |                                                               |
+    
+
+4.2.c Referencing a Previously Defined Template
+The template flag in the message code field is set but the "num fields" field 
+is zero. This is followed by the 2-byte user-specified template ID. The zero num
+fields value in conjunction with the template flag indicates that a separately-
+provided template (for instance, one that was extracted from a previously sent 
+message) is to be used in deserializing the message. The appropriate template to
+be used is identified by a template ID, and a previously generated internal 
+schema / layout generated associated with that template ID is used to deserial-
+ize the message.
+
+     0               1               2               3               
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |   |1|         | NUM FIELDS(0) |          TEMPLATE ID          |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |                    ... FIELD DATA ...                         |
+    +-+-                                                         -+-+
+    |                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+-- end --
