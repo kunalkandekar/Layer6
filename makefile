@@ -3,7 +3,7 @@
 # Makes layer6
 #
 
-CFLAGS  = -g -O3 -Wall
+CFLAGS  = -O3 -Wall
 #CFLAGS  = -g -Wall  #uncomment for debugging
 LDFLAGS = -shared -fPIC
 LDFLAGS = -shared -fPIC
