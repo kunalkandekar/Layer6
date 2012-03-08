@@ -20,7 +20,7 @@ Tested on MacOS X (10.6.8) and Linux (Ubuntu 10.10).
 
 Code Samples
 ============
-C (C99)
+C (C89)
 -------
 
     /* Serialization */
