@@ -407,10 +407,7 @@ static l6_htbl_entry_t *__l6_htbl_entry_alloc(l6_htbl_t *ph, void *key, int keys
     l6_htbl_entry_t *entry = (l6_htbl_entry_t *)malloc(sizeof(l6_htbl_entry_t));
     entry->keysize = keysize;
     if(keysize)
-    {
-        entry->key.p = (char*)malloc(keysize);
-        memcpy(entry->key.p, key, keysize);
-    }
+        entry->key.p = key;        //Intrusive map - use pointer to the name inside the field struct itself to avoid dup keys
     else
         entry->key.i = (*(int*)key);
 
@@ -421,8 +418,6 @@ static l6_htbl_entry_t *__l6_htbl_entry_alloc(l6_htbl_t *ph, void *key, int keys
 
 static void __l6_htbl_entry_free(l6_htbl_t *ph, l6_htbl_entry_t *entry) 
 {
-    if(entry->keysize)
-        free(entry->key.p);
     free(entry);
 }
 
@@ -677,28 +672,28 @@ typedef struct _l6msg_field
 {
     /* metadata */
                 
-    short       fid;
-    char        *name;
-    int         namelen;  //limited to 256
-    int         namemem;
-    int         type;
-    int         elem_size;   //0 - 8 bytes
-    short       count;    //limited to 2^16 - 1
-    short       mdlength;
-    int         index;
-    int         total_size;
-
-    int         offset_data;
-    int         offset_metadata;
+    short           fid;
+    char           *name;
+    int             namelen;  //limited to 256
+    int             namemem;
+    int             type;
+    int             elem_size;   //0 - 8 bytes
+    unsigned short  count;    //limited to 2^16 - 1
+    int             index;
+    int             total_size;
+    unsigned short  mdlength;
+    int             offset_data;
+    int             offset_metadata;
     
-    int         serialized;
-    int         internally_allocated;
+    int             is_dup;
+    int             serialized;
+    int             internally_allocated;
 
     /* data */
-    l6_data_type data;
-    void         *buffer;
-    int          datalen;
-    int          buflen;
+    l6_data_type    data;
+    void            *buffer;
+    int             datalen;
+    int             buflen;
 } l6msg_field;
 
 
@@ -711,6 +706,11 @@ typedef struct _l6msg_field_type_handler
     int (*serialize  )  (l6msg_field *field, char *buffer, int bswap,  int copy);
     int (*deserialize)  (l6msg_field *field, char *buffer, int bswap,  int copy);
 } l6msg_field_type_handler;
+
+typedef enum _msg_state {MSG_STATE_NEUTRAL, MSG_STATE_SRLZD_HDR, 
+                        MSG_STATE_SRLZD_META, MSG_STATE_SRLZD_DATA, 
+                         MSG_STATE_DESRLZD_HDR, MSG_STATE_DESRLZD_META, 
+                         MSG_STATE_DESRLZD_DATA } msg_state;
 
 typedef struct _l6msg_struct
 {
@@ -731,13 +731,16 @@ typedef struct _l6msg_struct
     unsigned int metadata_length;
     int          data_length;
     int          error_code;
-    char         *debug;
+    char         *debug;
+    unsigned int min_buffer_size;
+
     unsigned int idgen;
 
     /* serializing / deserializing modes */
     int           internally_allocated;
     int           do_byte_swap;
     int           is_locked;
+    msg_state     state;
     int           chk_submsg_cyc;
     int           offset_md;
     int           offset_d;
@@ -818,7 +821,9 @@ static int get_field_by_id(l6msg_struct *msg, int32_t fid, l6msg_field **field);
 static int get_field_named(l6msg_struct *msg, _const_char *key, l6msg_field **field);
 
 static int l6msg_deserialize_opt(l6msg_struct* msg, char *buffer, int length, int *left, int copy);
-
+static int l6msg_deserialize_header_opt(l6msg_struct *msg, char *data, int length, int *left, int opt);
+static int l6msg_deserialize_metadata_opt(l6msg_struct *msg, char *data, int length, int *left, int opt);
+static int l6msg_deserialize_data_opt(l6msg_struct *msg, char *data, int length, int *left, int opt);
 //static int l6msg_get_field(l6msg *msg, int id, l6msg_field *field);
 
 //static int l6msg_get_field_named(l6msg *msg, char *fieldname, l6msg_field *field);
@@ -832,7 +837,7 @@ static int l6msg_check_cyclic_submsg(l6msg_struct *msg);
 
 
 static int l6msg_serialize_field_metadata(l6msg_struct *msg, l6msg_field *field, char *buffer);
-static int l6msg_serialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buffer, int *left);
+static int l6msg_serialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buffer);
 static int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **field, char *buffer, int length);
 static int l6msg_deserialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buffer, int length, int *left, int copy);
 
@@ -1103,9 +1108,13 @@ static int set_l6msg(l6msg_field *field, void *data, int copy)
         {
             field->data.msg = dup_msg;
             field->internally_allocated = 1;
+            field->is_dup = 1;
         }
         else
+        {
             l6msg_free(&dup_msg);
+            ret = l6msg_get_error_code(&sub_msg);
+        }
     }
     else
         field->data.msg = (l6msg_struct*)data;
@@ -1121,6 +1130,8 @@ static int get_l6msg(l6msg_field *field, void **data, int offset, int count)
     {
         l6msg sub_msg = (l6msg)(field->data.msg);
         ret = l6msg_dup(&sub_msg, ret_msg);
+        if(ret < 0)
+            ret = l6msg_get_error_code(&sub_msg);
     }
     else
        *ret_msg = field->data.msg;
@@ -1133,12 +1144,14 @@ static int serialize_l6msg(l6msg_field *field, char *buffer, int bswap, int copy
     l6msg sub_msg =(l6msg)(field->data.msg);
     l6msg_set_auto_byte_order_mode(&sub_msg, bswap);
     int ret = l6msg_serialize(&sub_msg, buffer, field->datalen, &left);
-    if(ret >= 0) field->serialized = 1;
+    if(ret >= 0) 
+        field->serialized = 1;
     return ret;
 }
 
 static int deserialize_l6msg(l6msg_field *field, char *buffer, int bswap, int copy)
 {
+    int ret = 0;
     if(field->serialized)
     {
         l6msg sub_msg;
@@ -1152,24 +1165,9 @@ static int deserialize_l6msg(l6msg_field *field, char *buffer, int bswap, int co
         l6msg_set_deep_copy_default(&sub_msg, 0);
         field->internally_allocated = 1;
         field->serialized = 0;
-        return l6msg_deserialize(&sub_msg, buffer, field->count, &left);
+        ret = l6msg_deserialize(&sub_msg, buffer, field->count, &left);
     }
-    return 0;
-}
-
-static int get_l6msgz(l6msg_field *field, void **data, int offset, int copy)
-{
-    l6msg *sub_msg = (l6msg*)(*data);
-    //l6msg_set_auto_byte_order_mode(*sub_msg, bswap);   
-    int left = 0;
-    return l6msg_deserialize(sub_msg, field->data.ptr, field->datalen, &left);
-}
-
-static int serialize_l6msgz(l6msg_field *field, char *buffer, int bswap,  int copy)
-{
-    memcpy(buffer, field->data.ptr, field->datalen);
-    //field->type = L6_DATATYPE_L6MSG_SERIALIZED;
-    return 0;
+    return ret;
 }
 
 //field handlers
@@ -1202,7 +1200,7 @@ static l6msg_field_type_handler l6_field_type_handlers[30] = {
     { 4, set_floats, 	get_floats,  serialize_floats,  deserialize_floats  }, // 25
     { 8, set_doubles,	get_doubles, serialize_doubles, deserialize_doubles }, // 26
     { 1, set_l6msg,  	get_l6msg,   serialize_l6msg,   deserialize_l6msg   }, // 27
-    { 1, set_l6msg,  	get_l6msgz,  serialize_l6msgz,  deserialize_l6msg   },
+    { 0, set_noop,  	get_noop,    srlz_dsrlz_noop,   srlz_dsrlz_noop     },
     { 0, set_noop,      get_noop,    srlz_dsrlz_noop,   srlz_dsrlz_noop     },
 };
 
@@ -1372,30 +1370,26 @@ static int set_field_data_in_msg_with_id(l6msg_struct *msg,
 static l6msg_field *l6msg_alloc_field()
 {
     l6msg_field *field = (l6msg_field*)malloc(sizeof(l6msg_field));
-    field->name      = NULL;
     field->namemem   = 0;
+    field->name      = NULL;
     field->buffer    = NULL;
     field->buflen    = 0;
-    field->fid       = -1;
-    field->mdlength  = 1;   //basic length: type = byte
-    field->elem_size = 0;
-    field->namelen   = 0;
-
-    field->serialized = 0;
-    field->internally_allocated = 0;
+    l6msg_reset_field(field);
     return field;
 }
 
 
 static int l6msg_reset_field(l6msg_field *field)
 {
-    field->namelen   = 0;
-    field->datalen   = 0;
-    field->count     = 0;
-    field->elem_size = 0;
+    field->fid        = -1;
+    field->elem_size  = 0;
+    field->namelen    = 0;
+    field->is_dup     = 0;
+    field->mdlength   = 1;   //basic length: type = byte
     field->serialized = 0;
+    field->datalen    = 0;
+    field->count      = 0;
     field->internally_allocated = 0;
-    field->fid = -1;
     return 0;
 }
 
@@ -1762,24 +1756,30 @@ int l6msg_size(l6msg *lmsg)
     msg->total_length      = L6_BASE_MSG_HDR_LENGTH;
     msg->metadata_length   = L6_BASE_MSG_HDR_LENGTH;
     msg->data_length       = 0;
+    msg->min_buffer_size   = 0;
     int len = l6_mvec_size(msg->qfields);
     int i = 0;
-    for(i = 0; i < len; i++) {
+    for(i = 0; i < len; i++) 
+    {
         l6msg_field *field = (l6msg_field*)l6_mvec_get(msg->qfields, i);
 
-        if(field->type == L6_DATATYPE_L6MSG ) 
+        if(field->type == L6_DATATYPE_L6MSG)
         {
-            //check if it has been changed recently
+            //check if it has been changed recently (it won't be if it's a dup)
             l6msg sub_msg = (l6msg)field->data.msg;
             int sub_msg_size = l6msg_size(&sub_msg);
 
-            if(field->datalen != sub_msg_size) {
+            if(field->datalen != sub_msg_size) 
+            {
                 //update new field count and size
                 field->datalen = sub_msg_size; 
                 field->count = (short)field->datalen;
                 field->total_size = field->mdlength + field->datalen;
             }
         }
+        if(field->datalen > msg->min_buffer_size) 
+            msg->min_buffer_size = field->datalen;
+
         //updateAggregateLengthByDelta(field.size, field.mdlength, field.datalen);
         msg->total_length    += field->total_size;
         msg->metadata_length += field->mdlength;
@@ -1788,25 +1788,30 @@ int l6msg_size(l6msg *lmsg)
     return msg->total_length;
 }
 
-
-int l6msg_serialize(l6msg *lmsg, char *buffer, int length, int *left)
+//return the size of the field with largest data length
+//any serialization/deserialization buffer must be at least this big to operate properly
+int l6msg_min_buffer_size(l6msg *lmsg)
 {
-    int ret = 0;
     l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    l6msg_size(lmsg);
+    return msg->min_buffer_size;
+}
 
-    if(length < L6_BASE_MSG_HDR_LENGTH)
-    {
-        msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
-        if(_SET_DEBUG_INFO) 
-            sprintf_debug_info(msg, __LINE__, 
-                "buffer size %d < %d", length, L6_BASE_MSG_HDR_LENGTH);
-        return -1;    //field not found
-    }
-
-    l6msg_field *field;
+int l6msg_serialize_header(l6msg *lmsg, char *buffer, int length, int *left) 
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
 
     if(msg->is_locked  == 0)
     {
+        if(length < L6_BASE_MSG_HDR_LENGTH)
+        {
+            msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
+            if(_SET_DEBUG_INFO) 
+                sprintf_debug_info(msg, __LINE__, 
+                    "buffer size %d < %d", length, L6_BASE_MSG_HDR_LENGTH);
+            return -1;    //field not found
+        }
+
         msg->is_locked = 1;
         if(msg->chk_submsg_cyc && l6msg_check_cyclic_submsg(msg) < 0)
         {
@@ -1819,7 +1824,6 @@ int l6msg_serialize(l6msg *lmsg, char *buffer, int length, int *left)
         msg->offset_md  = 0;
         msg->offset_d   = 0;
         msg->itr        = 0;
-        msg->left       = msg->total_length;
 
         msg->nfields = l6_mvec_size(msg->qfields);
         
@@ -1842,143 +1846,191 @@ int l6msg_serialize(l6msg *lmsg, char *buffer, int length, int *left)
         //memcpy(buffer + msg->offset_md, &s, sizeof(int16_t));
         msg->offset_md += sizeof(int16_t);
 
-        msg->offset_d = msg->metadata_length;
-        if(msg->total_length > length)
-        {
-            msg->is_partial = 1;
-        }
-    }
+        msg->offset_d   = msg->metadata_length;
+        msg->is_partial = 1;
+        msg->state = MSG_STATE_SRLZD_HDR;
+        msg->done  = L6_BASE_MSG_HDR_LENGTH;
+        msg->left  = msg->total_length;
+        if(left)
+            *left = msg->left;
 
-    if(msg->is_partial)
+        msg->itr = 0;   //set up itr for metadata
+        return msg->done;
+    }
+    return 0;
+}
+
+int l6msg_serialize_metadata(l6msg *lmsg, char *buffer, int length, int *left) 
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    l6msg_field *field;
+
+    if(length < msg->metadata_length)
     {
-        if(msg->done == 0)
-        {
-            if(msg->tmpbuffermem == 0)
-            {
-                msg->tmpbuffermem = msg->total_length;
-                msg->tmpbuffer = (char*)malloc(msg->tmpbuffermem);
-            }
-            else if(msg->tmpbuffermem < msg->total_length)
-            {
-                msg->tmpbuffermem = msg->total_length;
-                msg->tmpbuffer = (char*)realloc(msg->tmpbuffer, msg->tmpbuffermem);
-            }
-            if(msg->tmpbuffer == NULL)
-            {
-                msg->tmpbuffermem = 0;
-                msg->error_code = L6_ERR_MEM_ALLOC;
-                if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, NULL);
-                return -1;
-            }
-            msg->tmpbufferage = 0;
-
-            msg->is_partial = 0;
-            msg->is_locked = 0;
-            ret = l6msg_serialize(lmsg, msg->tmpbuffer, msg->total_length, NULL);
-            msg->is_partial = 1;
-            msg->is_locked = 1;
-            msg->done = 0;
-            if(ret < 0)
-            {
-                return ret;
-            }
-        }
-        if((msg->done + length) > msg->total_length)
-        {
-            ret = msg->total_length - msg->done;
-        }
-        else
-        {
-            ret = length;
-        }
-        memcpy(buffer, msg->tmpbuffer + msg->done, ret);
-        msg->done += ret;
+        msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
+        if(_SET_DEBUG_INFO) 
+            sprintf_debug_info(msg, __LINE__, 
+                "buffer size %d < %d", length, msg->metadata_length);
+        return -1;    //field not found
     }
-    else
+
+    int offset = 0;
+    int remaining = length;
+    while(msg->itr < msg->nfields)
     {
-        if(msg->tmpbuffermem)
-        {
-            msg->tmpbufferage++;
-            if(msg->tmpbufferage > L6_MAX_UNUSED_SERIALIZATIONS)
-            {
-                //free tmpbuffer if unused for L6_MAX_UNUSED_SERIALIZATIONS+ serializations
-                free((char*)msg->tmpbuffer);
-                msg->tmpbuffermem = 0;
-                msg->tmpbuffer       = NULL;
-            }
-        }
+        field = (l6msg_field*)l6_mvec_get(msg->qfields, msg->itr);
 
-        for(msg->itr = 0; msg->itr < msg->nfields; msg->itr++)
-        {
-            field = (l6msg_field*)l6_mvec_get(msg->qfields, msg->itr);
-                        
-            ret = l6msg_serialize_field_metadata(msg, field, buffer);
-            if(ret < 0) return ret;
+        int ret = l6msg_serialize_field_metadata(msg, field, buffer + offset);
 
-            ret = l6msg_serialize_field_data(msg, field, buffer, left);
-            if(ret < 0) return ret;
-        }
-        msg->done = msg->offset_d;
+        //serialization error, return
+        if(ret < 0) 
+            return ret;
+
+        offset    += ret;
+        remaining -= ret;
+        msg->itr++;
     }
-    msg->left = msg->total_length - msg->done;
+    msg->is_partial = 1;
+    msg->done += offset;
+    msg->left  = msg->total_length - msg->done;
     if(left)
-    {
         *left = msg->left;
+    msg->state = MSG_STATE_SRLZD_META;
+    msg->itr = 0;    //set up itr for data
+    return offset;
+}
+
+int l6msg_serialize_data(l6msg *lmsg, char *buffer, int length, int *left)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+
+    if(length < msg->min_buffer_size)
+    {
+        msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
+        if(_SET_DEBUG_INFO) 
+            sprintf_debug_info(msg, __LINE__, 
+                "buffer size %d < min possible %d", length, msg->min_buffer_size);
+        return -1;    //field not found
     }
+
+    l6msg_field *field;
+    int offset = 0;
+    int remaining = length;
+    msg->state  = MSG_STATE_NEUTRAL;
+    while(msg->itr < msg->nfields)
+    {
+        field = (l6msg_field*)l6_mvec_get(msg->qfields, msg->itr);
+
+        //insufficient buffer size, break
+        if(field->datalen > remaining)
+        {
+            msg->state  = MSG_STATE_SRLZD_META; 
+            break;
+        }
+                    
+        int ret = l6msg_serialize_field_data(msg, field, buffer + offset);
+        if(ret < 0) 
+        {
+            msg->done = msg->offset_d;
+            return ret;
+        }
+        offset    += ret;
+        remaining -= ret;
+        msg->itr++;
+    }
+    msg->done += offset;   // = msg->offset_d;
+    msg->left  = msg->total_length - msg->done;
+    if(left)
+        *left = msg->left;
     if(msg->left == 0)
     {
+        msg->itr   = 0;   //reset itr for next round
+        msg->state = MSG_STATE_NEUTRAL;
         msg->is_partial = 0;
         msg->is_locked = 0;
     }
+    return offset;
+}
 
-    //dbgprint(buffer, msg->done);
-    return msg->done;
+
+int l6msg_serialize(l6msg *lmsg, char *buffer, int length, int *left)
+{
+    int ret = 0;
+    int offset = 0;
+    int remaining = length;
+
+    ret = l6msg_serialize_header(lmsg, buffer, length, left);
+    if(ret < 0) 
+        return ret;
+    offset    += ret;
+    remaining -= ret;
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+
+    //2 loops, one for metadata, other for data... better than one given locality of ref?
+    if(msg->state == MSG_STATE_SRLZD_HDR)
+    { 
+        ret = l6msg_serialize_metadata(lmsg, buffer + offset, remaining, left);
+        if(ret < 0) 
+            return ret;
+        offset    += ret;
+        remaining -= ret;
+    }
+
+    ret = l6msg_serialize_data(lmsg, buffer + offset, remaining, left);
+    if(ret < 0) 
+        return ret;
+    offset    += ret;
+    remaining -= ret;
+
+    return offset;
 }
 
 
 int l6msg_serialize_field_metadata(l6msg_struct *msg, l6msg_field *field, char *buffer)
 {
     //write metadata
+    int offset = 0;
     int type = field->type | (field->namelen  ? L6_FLAG_FIELD_HAS_NAME : 0) 
                            | (field->fid >= 0 ? L6_FLAG_FIELD_HAS_ID   : 0);
-    buffer[msg->offset_md++] = (unsigned char)type;
+    buffer[offset++] = (unsigned char)type;
     
     //write count, if non-primitive
     if(field->type & L6_FLAG_FIELD_IS_ARRAY)
     {
         //write metadata
         short s = htons(field->count);
-        *(int16_t*)(buffer + msg->offset_md) = s;
-        //memcpy(buffer + msg->offset_md, &s, sizeof(int16_t));
-        msg->offset_md += sizeof(int16_t);
+        *(int16_t*)(buffer + offset) = s;
+        //memcpy(buffer + offset, &s, sizeof(int16_t));
+        offset += sizeof(int16_t);
     }
 
     if(field->fid >= 0)
     {
         uint16_t s = htons(field->fid);
-        *(int16_t*)(buffer + msg->offset_md) = s;
-        //memcpy(buffer + msg->offset_md, &s, sizeof(int16_t));
-        msg->offset_md += sizeof(int16_t);
+        *(int16_t*)(buffer + offset) = s;
+        //memcpy(buffer + offset, &s, sizeof(int16_t));
+        offset += sizeof(int16_t);
     }
     
     if(field->namelen)
     {
-        //buffer[msg->offset_md++] = (unsigned char)(field->type | L6_FLAG_FIELD_HAS_NAME);
-        buffer[msg->offset_md++] = (unsigned char)(field->namelen);
-        memcpy(buffer + msg->offset_md, field->name, field->namelen);
-        msg->offset_md += field->namelen;
+        //buffer[offset++] = (unsigned char)(field->type | L6_FLAG_FIELD_HAS_NAME);
+        buffer[offset++] = (unsigned char)(field->namelen);
+        memcpy(buffer + offset, field->name, field->namelen);
+        offset += field->namelen;
     }
-    return 0;
+    msg->offset_md += offset;
+    return field->mdlength;
 }
 
-int l6msg_serialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buffer, int *left)
+int l6msg_serialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buffer)
 {
     int ret = 0;
 
     //serialize fields
     l6msg_field_type_handler *handler = get_field_type_handler(msg, field->type);
     if(handler)
-        ret = handler->serialize(field, (buffer + msg->offset_d), msg->do_byte_swap, 1);
+        ret = handler->serialize(field, buffer, msg->do_byte_swap, 1);
     else
         ret = -1;
 
@@ -1992,8 +2044,9 @@ int l6msg_serialize_field_data(l6msg_struct *msg, l6msg_field *field, char *buff
     {
         field->serialized = 1;        
         msg->offset_d += field->datalen;
+        ret = field->datalen;
     }
-    return 0;
+    return ret;
 }
 
 int l6msg_deserialize(l6msg *lmsg, char *buffer, int length, int *left)
@@ -2002,15 +2055,39 @@ int l6msg_deserialize(l6msg *lmsg, char *buffer, int length, int *left)
     return l6msg_deserialize_opt(msg, buffer, length, left, msg->deep_copy);
 }
 
+
+int l6msg_deserialize_copy(l6msg *lmsg, char *buffer, int length, int *left)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return l6msg_deserialize_opt(msg, buffer, length, left, 1);
+}
+
 int l6msg_deserialize_in_place(l6msg *lmsg, char *buffer, int length, int *left)
 {
     l6msg_struct *msg = (l6msg_struct*)(*lmsg);
     return l6msg_deserialize_opt(msg, buffer, length, left, 0);
 }
 
-static int l6msg_deserialize_opt(l6msg_struct *msg, char *buffer, int length, int *left, int copy)
+int l6msg_deserialize_header(l6msg *lmsg, char *buffer, int length, int *left) 
 {
-    int ret = 0;
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return l6msg_deserialize_header_opt(msg, buffer, length, left, msg->deep_copy);   
+}
+
+int l6msg_deserialize_metadata(l6msg *lmsg, char *buffer, int length, int *left) 
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return l6msg_deserialize_metadata_opt(msg, buffer, length, left, msg->deep_copy);
+}
+
+int l6msg_deserialize_data(l6msg *lmsg, char *buffer, int length, int *left)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return l6msg_deserialize_data_opt(msg, buffer, length, left, msg->deep_copy);
+}
+
+static int l6msg_deserialize_header_opt(l6msg_struct *msg, char *buffer, int length, int *left, int opt)
+{
     if(length < L6_BASE_MSG_HDR_LENGTH)
     {
         msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
@@ -2023,8 +2100,8 @@ static int l6msg_deserialize_opt(l6msg_struct *msg, char *buffer, int length, in
     //read base msg header
     if(msg->is_locked == 0)
     {
+        //msg->is_locked = 1;
         __l6msg_reset(msg, 1);
-        msg->left = msg->total_length;
 
         msg->code = buffer[0];
         if(msg->code & L6_FLAG_MSG_IS_TEMPLATE) 
@@ -2049,111 +2126,88 @@ static int l6msg_deserialize_opt(l6msg_struct *msg, char *buffer, int length, in
         msg->metadata_length = ntohs(s);
         msg->offset_md += sizeof(int16_t);
 
+        msg->left = msg->total_length;
+        msg->done = L6_BASE_MSG_HDR_LENGTH;
+
         msg->offset_d = msg->metadata_length;
-        msg->is_partial = 0;
-        if(msg->total_length > length)
-        {
-            msg->is_partial = 1;
-            msg->is_locked = 1;
-        }
+        msg->is_partial = 1;
+        //reset for the benefit of add-field routines
+        msg->offset_d        = msg->metadata_length;
+        msg->total_length    = L6_BASE_MSG_HDR_LENGTH;
+        msg->metadata_length = L6_BASE_MSG_HDR_LENGTH;
+        msg->data_length     = 0;
+        msg->state = MSG_STATE_DESRLZD_HDR;
+        msg->itr = 0; 
+        return msg->done;
     }
 
-    if(msg->is_partial)
-    {
-        ret = 0;
-        if(msg->done == 0)
-        {
-            if(msg->tmpbuffermem ==0)
-            {
-                msg->tmpbuffermem = msg->total_length;
-                msg->tmpbuffer = (char*)malloc(msg->tmpbuffermem);
-            }
-            else if(msg->tmpbuffermem < msg->total_length)
-            {
-                msg->tmpbuffermem = msg->total_length;
-                msg->tmpbuffer = (char*)realloc(msg->tmpbuffer, msg->tmpbuffermem);
-            }
-            if(msg->tmpbuffer == NULL)
-            {
-                msg->tmpbuffermem = 0;
-                msg->error_code = L6_ERR_MEM_ALLOC;
-                if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, NULL);
-                return -1;
-            }
-            msg->tmpbufferage = 0;
-        }
-        if((msg->done + length) > msg->total_length)
-        {
-            ret = msg->total_length - msg->done;
-        }
-        else
-        {
-            ret = length;
-        }
-        memcpy(msg->tmpbuffer + msg->done, buffer, ret);
-        msg->done += ret;
-        msg->left = msg->total_length - msg->done;
-        if(left)
-        {
-            *left = msg->left;
-        }
-        if(msg->left)
-        {
-            return msg->done;
-        }
-        else
-        {
-            msg->is_partial = 0;
-            msg->is_locked = 0;
-            buffer = msg->tmpbuffer;
-        }
-    }
-    else
-    {
-        if(msg->tmpbuffermem)
-        {
-            if(++msg->tmpbufferage > 25)
-            {
-                //free tmpbuffer if unused for 25+ serializations
-                free((char*)msg->tmpbuffer);
-            }
-            msg->tmpbuffermem = 0;
-            msg->tmpbuffer       = NULL;
-        }
-    }
+    return 0;
+}
 
-    msg->offset_d        = msg->metadata_length;
-    msg->total_length    = L6_BASE_MSG_HDR_LENGTH;
-    msg->metadata_length = L6_BASE_MSG_HDR_LENGTH;
-    msg->data_length     = 0;
-    
-    /*
-    if(remaining < 3)
+static int l6msg_deserialize_metadata_opt(l6msg_struct *msg, char *buffer, int length, int *left, int copy) 
+{
+    //if check memory access within bounds
+    if(msg->metadata_length > length) //out of bounds!
     {
-        msg->errorCode = L6_ERR_INSUFF_BUFFER_SIZE;
-        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, NULL);
+        msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
+        if(_SET_DEBUG_INFO) 
+            sprintf_debug_info(msg, __LINE__, 
+                "metadata length %d > %d", msg->metadata_length, length);
         return -1;
     }
-    */
-
+    int ret = 0;
     //read field metadata
-    for(msg->itr = 0; msg->itr < msg->nfields; ++msg->itr)
+    int offset = 0;
+    while(msg->itr < msg->nfields)
     {
         l6msg_field *field = NULL;
-        ret = l6msg_deserialize_field_metadata(msg, &field, buffer, length);
+        ret = l6msg_deserialize_field_metadata(msg, &field, buffer + offset, length);
         if(ret < 0) break;
+        offset += ret;
+        msg->itr++;
+    }
 
-        ret = l6msg_deserialize_field_data(msg, field, buffer, length, left, copy);
-        if(ret < 0) break;
+    if(ret < 0)
+    {
+        //if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, NULL);
+        return ret;
+    }
+    msg->is_partial = 1;
+    msg->state = MSG_STATE_DESRLZD_META;
+    msg->done += offset;
+    msg->left  = msg->total_length - msg->done;
+    msg->itr   = 0;
+    if(left) 
+        *left = msg->left;
 
+    return offset;
+}
+
+static int l6msg_deserialize_data_opt(l6msg_struct *msg, char *buffer, int length, int *left, int copy)
+{
+    int ret = 0;
+    //read field data
+    int offset = 0;
+    while(msg->itr < msg->nfields)
+    {
         //if check memory access within bounds
-        if(msg->offset_d > length) //out of bounds!
+        l6msg_field *field = (l6msg_field*)l6_mvec_get(msg->qfields, msg->itr);
+        if((offset + field->datalen) > length) //out of bounds!
         {
+            /*
             msg->error_code = L6_ERR_OFFSET_OUT_OF_BOUNDS;
-            //__l6msg_reset(msg, 0);
-            if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "%d > %d", msg->offset_d, length);
+            if(_SET_DEBUG_INFO) 
+                sprintf_debug_info(msg, __LINE__, 
+                    "@ %d/%d data offset (%d + %d)=%d > %d", field->itr, field->nfields, 
+                        offset, field->datalen, (offset + field->datalen)length);
             return -1;
+            */
+            break;
         }
+        ret = l6msg_deserialize_field_data(msg, field, buffer + offset, length, left, copy);
+        if(ret < 0) break;
+        offset += ret;
+        msg->itr++;
     }
 
     if(ret < 0)
@@ -2162,15 +2216,44 @@ static int l6msg_deserialize_opt(l6msg_struct *msg, char *buffer, int length, in
         return ret;
     }
 
-    msg->done = msg->offset_d;
-    msg->left = msg->total_length - msg->done;
+    msg->done += offset;    msg->left  = msg->total_length - msg->done;
+    if(!msg->left)
+    {
+        msg->is_partial = 0;
+        msg->itr   = 0;
+        msg->state = MSG_STATE_NEUTRAL;
+        msg->is_locked = 0;
+    }
     if(left) 
         *left = msg->left;
 
-    return msg->done;
+    return offset;
 }
 
-int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **field, char *buffer, int length)
+static int l6msg_deserialize_opt(l6msg_struct *msg, char *buffer, int length, int *left, int copy)
+{
+    int ret = l6msg_deserialize_header_opt(msg, buffer, length, left, copy);
+    if(ret < 0) return ret;
+
+    int offset = ret;
+    if(msg->state != MSG_STATE_DESRLZD_META) 
+    {
+        //read msg metadata
+        ret = l6msg_deserialize_metadata_opt(msg, buffer + offset, length - offset, left, copy);
+        if(ret < 0) return ret;
+        offset += ret;
+    }
+
+    //read msg data
+    ret = l6msg_deserialize_data_opt(msg, buffer + offset, length - offset, left, copy);
+    if(ret < 0) return ret;
+    offset += ret;
+    //printf("\n----- %p: dat +%d = %d / %d", msg, ret, offset, length);
+        
+    return offset;
+}
+
+int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **pfield, char *buffer, int length)
 {
     unsigned char type = 0;
     char *name = NULL;
@@ -2179,34 +2262,35 @@ int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **field, cha
     int  fid = -1;
     int  count = 1;
 
+    int offset = 0;
     int remaining = length - msg->offset_d;
 
     //read metadata
-    type = (unsigned char)buffer[msg->offset_md++];
+    type = (unsigned char)buffer[offset++];
     remaining--;
     if(type & L6_FLAG_FIELD_IS_ARRAY)
     {
-        //memcpy(&data, buffer + msg->offset_md, sizeof(int16_t));
-        uint16_t s = *(unsigned short*)(buffer + msg->offset_md);
+        //memcpy(&data, buffer + offset, sizeof(int16_t));
+        uint16_t s = *(unsigned short*)(buffer + offset);
         count = ntohs(s);
-        msg->offset_md += sizeof(int16_t);
+        offset += sizeof(int16_t);
         remaining-=2;
     }
 
     if(type & L6_FLAG_FIELD_HAS_ID)
     {
-        //memcpy(&data, buffer + msg->offset_md, sizeof(int16_t));
+        //memcpy(&data, buffer + offset, sizeof(int16_t));
         //fid = ntohs(data.s);
-        fid = ntohs(*(short*)(buffer + msg->offset_md));        msg->offset_md += sizeof(int16_t);
+        fid = ntohs(*(short*)(buffer + offset));        offset += sizeof(int16_t);
         remaining -= 2;
     }
 
     if(type & L6_FLAG_FIELD_HAS_NAME)
     {
         //field is named
-        namelen = (unsigned int)(buffer[msg->offset_md++]);
-        name = buffer + msg->offset_md;
-        msg->offset_md += namelen;
+        namelen = (unsigned int)(buffer[offset++]);
+        name = buffer + offset;
+        offset += namelen;
         remaining -= (1 + namelen);
     }
 
@@ -2217,10 +2301,8 @@ int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **field, cha
         if(msg->ext_handler != NULL) 
             len = 1;
     }
-    else if(type < L6_ALL_DATATYPES_MAX)
-        len = l6_field_type_handlers[type].element_size_bytes;
-
     else
+        len = l6_field_type_handlers[type].element_size_bytes;
 
     if(len < 1)
     {
@@ -2228,9 +2310,12 @@ int l6msg_deserialize_field_metadata(l6msg_struct *msg, l6msg_field **field, cha
         if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "type=%d", type);
         return -1;
     }
-    
-    return set_field_data_in_msg_ret(msg, field, (_const_char *)name, 
+
+    int ret = set_field_data_in_msg_ret(msg, pfield, (_const_char *)name, 
                         (namelen - 1), fid, -1, type, NULL, len, count, 0);
+    if(ret < 0) return ret;
+    msg->offset_md += offset;
+    return offset;   
 }
 
 int l6msg_deserialize_field_data(l6msg_struct *msg, l6msg_field *field, 
@@ -2239,17 +2324,11 @@ int l6msg_deserialize_field_data(l6msg_struct *msg, l6msg_field *field,
     int ret = 0;
     
     //check field type handled
-    if(msg->offset_d > length)
-    {
-        msg->error_code = L6_ERR_INSUFF_BUFFER_SIZE;
-        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, NULL);
-        return -1;
-    }
-    
+    int offset = 0;
     field->serialized = 1;
     l6msg_field_type_handler *handler = get_field_type_handler(msg, field->type);
     if(handler)
-        ret = handler->deserialize(field, (buffer + msg->offset_d), msg->do_byte_swap, copy);
+        ret = handler->deserialize(field, (buffer + offset), msg->do_byte_swap, copy);
     else
         ret = -1;
 
@@ -2263,10 +2342,11 @@ int l6msg_deserialize_field_data(l6msg_struct *msg, l6msg_field *field,
     }
     else
     {
-        msg->offset_d += field->datalen;
+        offset = field->datalen;
+        msg->offset_d += offset;
         field->offset_data = msg->offset_d;
     }
-    return ret;
+    return offset;
 }
 
 /*
@@ -2283,6 +2363,7 @@ int l6msg_init(l6msg *lmsg)
     msg->code               = 0;
     msg->total_length       = L6_BASE_MSG_HDR_LENGTH;
     msg->metadata_length    = L6_BASE_MSG_HDR_LENGTH;
+    msg->min_buffer_size    = 0;
     msg->data_length        = 0;
     msg->poolsize           = opt;
     msg->error_code         = 0;
@@ -2294,6 +2375,7 @@ int l6msg_init(l6msg *lmsg)
     msg->idgen              = 1024; //currently unused, but may be needed
 
     msg->is_locked          = 0;
+    msg->state              = MSG_STATE_NEUTRAL;
     msg->chk_submsg_cyc     = 1;
     msg->is_partial         = 0;
     msg->offset_md          = 0;
@@ -2313,6 +2395,13 @@ int l6msg_init(l6msg *lmsg)
     l6_mvec_init(&(msg->qfields),   sizeof(l6msg_field), L6_MSG_LIST_INIT_CAP);
     l6_mvec_init(&(msg->qpool),     sizeof(l6msg_field), L6_MSG_LIST_INIT_CAP);
     return 0;
+}
+
+l6msg l6msg_alloc()
+{
+    l6msg lmsg;
+    l6msg_init(&lmsg);
+    return lmsg;
 }
 
 const char* l6msg_get_debug_info(l6msg *lmsg) {
@@ -2535,7 +2624,7 @@ int l6msg_get_check_cyclic_submsg(l6msg *lmsg)
     return msg->chk_submsg_cyc;
 }
 
-/*********************************** GET/SET DATA FUNCTIONS *********************************/
+/*********************************** GET/SET METADATA FUNCTIONS *****************************/
 
 void l6msg_set_code(l6msg *lmsg, int code) 
 {
@@ -2569,1523 +2658,6 @@ int l6msg_is_templated(l6msg *lmsg)
     msg->error_code = L6_ERR_NOT_IMPLEMENTED;
     return -1;
 }
-
-/*
-#define __CONCAT(...) __VA_ARGS__
-
-#define DEF_SET_FIELD_VAL(SETADD, TYPENAME, TYPECODE, TYPE, DATASIZE, BYREFORVAL, ACCESS, KEYTYPE, KEY, KEYVAL) \
-int l6msg_##SETADD##BYREFORVAL##_##TYPENAME##ACCESS##(l6msg *lmsg, __CONCAT(KEYTYPE KEY, TYPE) data)            \
-{                                                                                                               \
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);                                                                 \
-    return set_field_data_in_msg_ret##ACCESS##(msg, __CONCAT(KEY,KEYVAL), TYPECODE, &data, DATASIZE, 1, msg->deep_copy); \
-}
-
-DEF_SET_FIELD_VAL(add, byte, L6_DATATYPE_BYTE, char, 1,,,,, -1)
-*/
-
-int l6msg_set_int16(l6msg *lmsg, int fid, int16_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_SHORT, 
-                            &data, sizeof(int16_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_short(l6msg *msg, int fid, short data)
-{ 
-    return l6msg_set_int16(msg, fid, (int16_t) data); 
-}
-
-int l6msg_set_int32(l6msg *lmsg, int fid, int32_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT32, 
-                            &data, sizeof(int32_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_int(l6msg *msg, int fid, int data)
-{ 
-    return l6msg_set_int32 (msg, fid, (int32_t) data); 
-}
-
-int l6msg_set_int64(l6msg *lmsg, int fid, int64_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT64, 
-                            &data, sizeof(int64_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_long(l6msg *msg, int fid, long long int data)
-{ 
-    return l6msg_set_int64(msg, fid, (int64_t) data); 
-}
-
-int l6msg_set_float(l6msg *lmsg, int fid, float data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_FLOAT, 
-                            &data, sizeof(float), 1, msg->deep_copy);
-}
-
-int l6msg_set_double(l6msg *lmsg, int fid, double data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_DOUBLE, 
-                    &data, sizeof(double), 1, msg->deep_copy);
-}
-
-//By Index
-int l6msg_set_int16_at_index(l6msg *lmsg, int index, int16_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT, 
-                    &data, sizeof(int16_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_short_at_index(l6msg *msg, int index, short data)
-{ 
-    return l6msg_set_int16_at_index(msg, index, (int16_t) data); 
-}
-
-int l6msg_set_int32_at_index(l6msg *lmsg, int index, int32_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
-                    &data, sizeof(int32_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_int_at_index(l6msg *msg, int index, int data)
-{ 
-    return l6msg_set_int32_at_index (msg, index, (int32_t) data); 
-}
-
-int l6msg_set_int64_at_index(l6msg *lmsg, int index, int64_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
-                            &data, sizeof(int64_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_long_at_index(l6msg *msg, int index, long long int data)
-{ 
-    return l6msg_set_int64_at_index (msg, index, (int64_t) data); 
-}
-
-int l6msg_set_float_at_index(l6msg *lmsg, int index, float data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_FLOAT, 
-                            &data, sizeof(float), 1, msg->deep_copy);
-}
-
-int l6msg_set_double_at_index(l6msg *lmsg, int index, double data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_DOUBLE, 
-                            &data, sizeof(double), 1, msg->deep_copy);
-}
-
-//Arrays
-int l6msg_set_string_at_index(l6msg *lmsg, int index, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    //md = 1 type + 2 len
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_STRING, 
-                        (char*)data, 1, strlen(data)+1, msg->deep_copy);
-}
-
-int l6msg_set_byte_array_at_index(l6msg *lmsg, int index, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTES, 
-                            data, sizeof(char), size, msg->deep_copy);
-}
-
-int l6msg_set_int16_array_at_index(l6msg *lmsg, int index, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT_ARRAY, 
-                            data, sizeof(int16_t), count, msg->deep_copy);
-}
-
-int l6msg_set_short_array_at_index(l6msg *msg, int index, short *data, int count)
-{ 
-    return l6msg_set_int16_array_at_index(msg, index, (int16_t*) data, count); 
-}
-
-int l6msg_set_int32_array_at_index(l6msg *lmsg, int index, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
-                            data, sizeof(int32_t), count, msg->deep_copy);
-}
-
-int l6msg_set_int_array_at_index(l6msg *msg, int index, int *data, int count)
-{ 
-    return l6msg_set_int32_array_at_index(msg, index, (int32_t*) data, count); 
-}
-
-int l6msg_set_int64_array_at_index(l6msg *lmsg, int index, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
-                            data, sizeof(int64_t), count, msg->deep_copy);
-}
-
-int l6msg_set_long_array_at_index(l6msg *msg, int index, long long int *data, int count) 
-{ 
-    return l6msg_set_int64_array_at_index(msg, index, (int64_t*) data, count); 
-}
-
-int l6msg_set_float_array_at_index(l6msg *lmsg, int index, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, msg->deep_copy);
-}
-
-int l6msg_set_double_array_at_index(l6msg *lmsg, int index, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, msg->deep_copy);
-}
-
-int l6msg_set_layer6_msg_at_index(l6msg *lmsg, int index, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), msg->deep_copy);
-}
-
-//Array Pointers
-int l6msg_set_string_ptr_at_index(l6msg *lmsg, int index, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, 0);
-}
-
-int l6msg_set_byte_array_ptr_at_index(l6msg *lmsg, int index, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                        L6_DATATYPE_BYTES, data, 1, size, 0);
-}
-
-int l6msg_set_int16_array_ptr_at_index(l6msg *lmsg, int index, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
-}
-
-int l6msg_set_short_array_ptr_at_index(l6msg *msg, int index, short *data, int count)
-{ 
-    return l6msg_set_int16_array_ptr_at_index(msg, index, 
-                                    (int16_t*) data, count); 
-}
-
-int l6msg_set_int32_array_ptr_at_index(l6msg *lmsg, int index, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
-}
-
-int l6msg_set_int_array_ptr_at_index(l6msg *msg, int index, int *data, int count)
-{ 
-    return l6msg_set_int32_array_ptr_at_index(msg, index, 
-                                    (int32_t*) data, count); 
-}
-
-int l6msg_set_int64_array_ptr_at_index(l6msg *lmsg, int index, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
-}
-
-int l6msg_set_long_array_ptr_at_index(l6msg *msg, int index, long long int *data, int count)
-{ 
-    return l6msg_set_int64_array_ptr_at_index(msg, index, (int64_t*) data, count); 
-}
-
-int l6msg_set_float_array_ptr_at_index(l6msg *lmsg, int index, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
-}
-
-int l6msg_set_double_array_ptr_at_index(l6msg *lmsg, int index, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, 0);
-}
-
-int l6msg_set_layer6_msg_ptr_at_index(l6msg *lmsg, int index, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
-}
-
-
-//By Name
-int l6msg_set_int16_named(l6msg *lmsg, _const_char *key, int16_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                    L6_DATATYPE_SHORT, &data, sizeof(int16_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_short_named(l6msg *msg, _const_char *key, short data)
-{ 
-    return l6msg_set_int16_named(msg, key, (int16_t) data); 
-}
-
-int l6msg_set_int32_named(l6msg *lmsg, _const_char *key, int32_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT32, &data, sizeof(int32_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_int_named(l6msg *msg, _const_char *key, int data)
-{ 
-    return l6msg_set_int32_named (msg, key, (int32_t) data); 
-}
-
-int l6msg_set_int64_named(l6msg *lmsg, _const_char *key, int64_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT64, &data, sizeof(int64_t), 1, msg->deep_copy);
-}
-
-int l6msg_set_long_named(l6msg *msg, _const_char *key, long long int data)
-{ 
-    return l6msg_set_int64_named (msg, key, (int64_t) data); 
-}
-
-int l6msg_set_float_named(l6msg *lmsg, _const_char *key, float data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_FLOAT, &data, sizeof(float), 1, msg->deep_copy);
-}
-
-int l6msg_set_double_named(l6msg *lmsg, _const_char *key, double data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_DOUBLE, &data, sizeof(double), 1, msg->deep_copy);
-}
-
-//Arrays
-int l6msg_set_string(l6msg *lmsg, int fid, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    //md = 1 type + 2 len
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_STRING, 
-                                (char*)data, 1, strlen(data)+1, msg->deep_copy);
-}
-
-int l6msg_set_byte_array(l6msg *lmsg, int fid, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_BYTES, 
-                                    data, sizeof(char), size, msg->deep_copy);
-}
-
-int l6msg_set_int16_array(l6msg *lmsg, int fid, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
-                                    data, sizeof(int16_t), count, msg->deep_copy);
-}
-
-int l6msg_set_short_array(l6msg *msg, int fid, short *data, int count)
-{ 
-    return l6msg_set_int16_array (msg, fid, (int16_t*) data, count); 
-}
-
-int l6msg_set_int32_array(l6msg *lmsg, int fid, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
-                                    data, sizeof(int32_t), count, msg->deep_copy);
-}
-
-int l6msg_set_int_array(l6msg *msg, int fid, int *data, int count)
-{ 
-    return l6msg_set_int32_array (msg, fid, (int32_t*) data, count); 
-}
-
-int l6msg_set_int64_array(l6msg *lmsg, int fid, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
-                                    data, sizeof(int64_t), count, msg->deep_copy);
-}
-
-int l6msg_set_long_array(l6msg *msg, int fid, long long int *data, int count) 
-{ 
-    return l6msg_set_int64_array (msg, fid, (int64_t*) data, count); 
-}
-
-int l6msg_set_float_array(l6msg *lmsg, int fid, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
-                                    data, sizeof(float), count, msg->deep_copy);
-}
-
-int l6msg_set_double_array(l6msg *lmsg, int fid, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
-                                    data, sizeof(double), count, msg->deep_copy);
-}
-
-int l6msg_set_layer6_msg(l6msg *lmsg, int fid, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_L6MSG, 
-                                (*data), 1, l6msg_size(data), msg->deep_copy);
-}
-
-//Array Pointers
-int l6msg_set_string_ptr(l6msg *lmsg, int fid, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_STRING, 
-                                            (char*)data, 1, strlen(data)+1, 0);
-}
-
-int l6msg_set_byte_array_ptr(l6msg *lmsg, int fid, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_BYTES, data, 1, size, 0);
-}
-
-int l6msg_set_int16_array_ptr(l6msg *lmsg, int fid, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
-}
-
-int l6msg_set_short_array_ptr(l6msg *msg, int fid, short *data, int count)
-{ 
-    return l6msg_set_int16_array_ptr (msg, fid, (int16_t*) data, count); 
-}
-
-int l6msg_set_int32_array_ptr(l6msg *lmsg, int fid, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
-}
-
-int l6msg_set_int_array_ptr(l6msg *msg, int fid, int *data, int count)
-{ 
-    return l6msg_set_int32_array_ptr (msg, fid, (int32_t*) data, count); 
-}
-
-int l6msg_set_int64_array_ptr(l6msg *lmsg, int fid, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
-}
-
-int l6msg_set_long_array_ptr(l6msg *msg, int fid, long long int *data, int count)
-{ 
-    return l6msg_set_int64_array_ptr (msg, fid, (int64_t*) data, count); 
-}
-
-int l6msg_set_float_array_ptr(l6msg *lmsg, int fid, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
-}
-
-int l6msg_set_double_array_ptr(l6msg *lmsg, int fid, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, 0);
-}
-
-int l6msg_set_layer6_msg_ptr(l6msg *lmsg, int fid, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_with_id(msg, fid, 
-                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
-}
-
-
-//Arrays by name
-int l6msg_set_string_named(l6msg *lmsg, _const_char *key, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, msg->deep_copy);
-}
-
-int l6msg_set_byte_array_named(l6msg *lmsg, _const_char *key, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_BYTES, data, sizeof(char), size, msg->deep_copy);
-}
-
-int l6msg_set_int16_array_named(l6msg *lmsg, _const_char *key, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, msg->deep_copy);
-}
-
-int l6msg_set_short_array_named(l6msg *msg, _const_char *key, short *data, int count)
-{ 
-    return l6msg_set_int16_array_named (msg, key, (int16_t*) data, count); 
-}
-
-int l6msg_set_int32_array_named(l6msg *lmsg, _const_char *key, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, msg->deep_copy);
-}
-
-int l6msg_set_int_array_named(l6msg *msg, _const_char *key, int  *data, int count)
-{ 
-    return l6msg_set_int32_array_named (msg, key, (int32_t*) data, count); 
-}
-
-int l6msg_set_int64_array_named(l6msg *lmsg, _const_char *key, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, msg->deep_copy);
-}
-
-int l6msg_set_long_array_named(l6msg *msg, _const_char *key, long long int *data, int count)
-{ 
-    return l6msg_set_int64_array_named (msg, key, (int64_t*) data, count); 
-}
-
-int l6msg_set_float_array_named(l6msg *lmsg, _const_char *key, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, msg->deep_copy);
-}
-
-int l6msg_set_double_array_named(l6msg *lmsg, _const_char *key, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, msg->deep_copy);
-}
-
-int l6msg_set_layer6_msg_named(l6msg *lmsg, _const_char *key, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), msg->deep_copy);
-}
-
-//Array Pointers by name
-int l6msg_set_string_ptr_named(l6msg *lmsg, _const_char *key, const char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, 0);
-}
-
-int l6msg_set_byte_array_ptr_named(l6msg *lmsg, _const_char *key, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_BYTES, data, sizeof(char), size, 0);
-}
-
-int l6msg_set_int16_array_ptr_named(l6msg *lmsg, _const_char *key, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
-}
-
-int l6msg_set_short_array_ptr_named(l6msg *msg, _const_char *key, short *data, int count)
-{ 
-    return l6msg_set_int16_array_ptr_named (msg, key, (int16_t*)data, count); 
-}
-
-int l6msg_set_int32_array_ptr_named(l6msg *lmsg, _const_char *key, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
-}
-
-int l6msg_set_int_array_ptr_named(l6msg *msg, _const_char *key, int *data, int count)     
-{ 
-    return l6msg_set_int32_array_ptr_named (msg, key, (int32_t*)data, count); 
-}
-
-int l6msg_set_int64_array_ptr_named(l6msg *lmsg, _const_char *key, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
-}
-
-int l6msg_set_long_array_ptr_named    (l6msg *msg, _const_char *key, long long int *data, int count)  
-{ 
-    return l6msg_set_int64_array_ptr_named (msg, key, (int64_t*)data, count); 
-}
-
-int l6msg_set_float_array_ptr_named(l6msg *lmsg, _const_char *key, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
-}
-
-int l6msg_set_double_array_ptr_named(l6msg *lmsg, _const_char *key, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_DOUBLE_ARRAY, &data, sizeof(double), count, 0);
-}
-
-int l6msg_set_layer6_msg_ptr_named(l6msg *lmsg, _const_char *key, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
-}
-
-//Get Scalars
-int l6msg_get_int16(l6msg *lmsg, int fid, int16_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT, 
-                            (void**)&data, sizeof(int16_t), 0, 1, &fcount);
-}
-
-int l6msg_get_short(l6msg *msg, int fid, short *data)
-{ 
-    return l6msg_get_int16 (msg, fid, (int16_t*)data); 
-}
-
-int l6msg_get_int32(l6msg *lmsg, int fid, int32_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32, 
-                            (void**)&data, sizeof(int32_t), 0, 1, &fcount);
-}
-
-int l6msg_get_int(l6msg *msg, int fid, int *data) 
-{ 
-    return l6msg_get_int32 (msg, fid, (int32_t*)data); 
-}
-
-int l6msg_get_int64(l6msg *lmsg, int fid, int64_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64, 
-                            (void**)&data, sizeof(int64_t), 0, 1, &fcount);
-}
-
-int l6msg_get_long(l6msg *msg, int fid, long long int *data)
-{ 
-    return l6msg_get_int64 (msg, fid, (int64_t*)data); 
-}
-
-int l6msg_get_float(l6msg *lmsg, int fid, float *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT, 
-                            (void**)&data, sizeof(float), 0, 1, &fcount);
-}
-
-int l6msg_get_double(l6msg *lmsg, int fid, double *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE, 
-                            (void**)&data, sizeof(double), 0, 1, &fcount);
-}
-
-//Get Scalars by name
-int l6msg_get_int16_named(l6msg *lmsg, _const_char *key, int16_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT, 
-                            (void**)&data, sizeof(int16_t), 0, 1, &fcount);
-}
-
-int l6msg_get_short_named(l6msg *msg, _const_char *key, short *data)
-{ 
-    return l6msg_get_int16_named (msg, key, (int16_t*)data); 
-}
-
-int l6msg_get_int32_named(l6msg *lmsg, _const_char *key, int32_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32, 
-                            (void**)&data, sizeof(int32_t), 0, 1, &fcount);
-}
-
-int l6msg_get_int_named(l6msg *msg, _const_char *key, int *data)
-{ 
-    return l6msg_get_int32_named (msg, key, (int32_t*)data); 
-}
-
-int l6msg_get_int64_named(l6msg *lmsg, _const_char *key, int64_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64, 
-                            (void**)&data, sizeof(int64_t), 0, 1, &fcount);
-}
-
-int l6msg_get_long_named(l6msg *msg, _const_char *key, long long int *data)
-{ 
-    return l6msg_get_int64_named (msg, key, (int64_t*)data); 
-}
-
-int l6msg_get_float_named(l6msg *lmsg, _const_char *key, float *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT, 
-                            (void**)&data, sizeof(float), 0, 1, &fcount);
-}
-
-int l6msg_get_double_named(l6msg *lmsg, _const_char *key, double *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE, 
-                            (void**)&data, sizeof(double), 0, 1, &fcount);
-}
-
-
-// Get Arrays
-int l6msg_get_string(l6msg *lmsg, int fid, char *data, int len)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    int ret = get_field_data_in_msg_by_id(msg, fid, 
-                L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
-    if(ret >= 0)
-    {
-        data[len-1] = '\0';
-    }
-    return ret;
-}
-
-int l6msg_get_byte_array(l6msg *lmsg, int fid, char *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_BYTES, 
-                        (void**)&data, sizeof(char), 0, count, &fcount);
-}
-
-int l6msg_get_int16_array(l6msg *lmsg, int fid, int16_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
-                        (void**)&data, sizeof(int16_t), offset, count, &fcount);
-}
-
-int l6msg_get_short_array(l6msg *msg, int fid, short *data, int offset, int count)  
-{ 
-    return l6msg_get_int16_array (msg, fid, (int16_t*)data, offset, count); 
-}
-
-int l6msg_get_int32_array(l6msg *lmsg, int fid, int32_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)&data, sizeof(int32_t), offset, count, &fcount);
-}
-
-int l6msg_get_int_array(l6msg *msg, int fid, int *data, int offset, int count)  
-{ 
-    return l6msg_get_int32_array (msg, fid, (int32_t*)data, offset, count); 
-}
-
-int l6msg_get_int64_array(l6msg *lmsg, int fid, int64_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)&data, sizeof(int64_t), offset, count, &fcount);
-}
-
-int l6msg_get_long_array(l6msg *msg, int fid, 
-                        long long int *data, int offset, int count)
-{ 
-    return l6msg_get_int64_array (msg, fid, (int64_t*)data, offset, count); 
-}
-
-int l6msg_get_float_array(l6msg *lmsg, int fid, float *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
-                        (void**)&data, sizeof(float), offset, count, &fcount);
-}
-
-int l6msg_get_double_array(l6msg *lmsg, int fid, double *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
-                        (void**)&data, sizeof(double), offset, count, &fcount);
-}
-
-int l6msg_get_layer6_msg(l6msg *lmsg, int fid, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_L6MSG, 
-                        (void**)&data, 1, 0, 1, &fcount);
-}
-
-int l6msg_get_layer6_msg_ptr(l6msg *lmsg, int fid, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_L6MSG, 
-                        (void**)&data, 1, 0, -1, &fcount);
-}
-
-//Get Arrays By Name
-int l6msg_get_string_named(l6msg *lmsg, _const_char *key, char *data, int len)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    int ret = get_field_data_in_msg_named(msg, key, 
-                L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
-    if(ret >= 0)
-    {
-        data[len-1] = '\0';
-    }
-    return ret;
-}
-
-int l6msg_get_byte_array_named(l6msg *lmsg, _const_char *key, 
-                                char *data, int offset, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTES, 
-                        (void**)&data, sizeof(char), offset, size, &fcount);
-}
-
-int l6msg_get_int16_array_named(l6msg *lmsg, _const_char *key, 
-                                int16_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT_ARRAY, 
-                        (void**)&data, sizeof(int16_t), offset, count, &fcount);
-}
-
-int l6msg_get_short_array_named(l6msg *msg, _const_char *key, 
-                                short *data, int offset, int count) 
-{ 
-    return l6msg_get_int16_array_named(msg,key,(int16_t*)data,offset,count); 
-}
-
-int l6msg_get_int32_array_named(l6msg *lmsg, _const_char *key, 
-                                int32_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)&data, sizeof(int32_t), offset, count, &fcount);
-}
-
-int l6msg_get_int_array_named(l6msg *msg, _const_char *key, 
-                                int *data, int offset, int count) 
-{ 
-    return l6msg_get_int32_array_named(msg,key,(int32_t*)data,offset,count); 
-}
-
-int l6msg_get_int64_array_named(l6msg *lmsg, _const_char *key, 
-                                int64_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)&data, sizeof(int64_t), offset, count, &fcount);
-}
-
-int l6msg_get_long_array_named(l6msg *msg, _const_char *key, 
-                                long long int *data, int offset, int count)
-{ 
-    return l6msg_get_int64_array_named(msg,key,(int64_t*)data, offset, count); 
-}
-
-int l6msg_get_float_array_named(l6msg *lmsg, _const_char *key, 
-                                float *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT_ARRAY, 
-                        (void**)&data, sizeof(float), offset, count, &fcount);
-}
-
-int l6msg_get_double_array_named(l6msg *lmsg, _const_char *key, 
-                                double *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE_ARRAY, 
-                        (void**)&data, sizeof(double), offset, count, &fcount);
-}
-
-int l6msg_get_layer6_msg_named(l6msg *lmsg, _const_char *key, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_L6MSG, 
-                        (void**)&data, sizeof(char), 0, 0, &fcount);
-}
-
-int l6msg_get_layer6_msg_ptr_named(l6msg *lmsg, _const_char *key, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_L6MSG, 
-                        (void**)&data, sizeof(char), 0, -1, &fcount);
-}
-
-//Get Array Pointers
-int l6msg_get_string_ptr(l6msg *lmsg, int fid, const char **data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int size;
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_STRING, 
-                        (void**)data, sizeof(char), 0, -1, &size);
-}
-
-int l6msg_get_byte_array_ptr(l6msg *lmsg, int fid, char **data, int *size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_BYTES, 
-                        (void**)data, sizeof(char), 0, -1, size);
-}
-
-int l6msg_get_int16_array_ptr(l6msg *lmsg, int fid, short **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
-                        (void**)data, sizeof(int16_t), 0, -1, count);
-}
-
-int l6msg_get_short_array_ptr(l6msg *msg, int fid, short **data, int *count)     
-{ 
-    return l6msg_get_int16_array_ptr (msg, fid, (int16_t**)data, count); 
-}
-
-int l6msg_get_int32_array_ptr(l6msg *lmsg, int fid, int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)data, sizeof(int32_t), 0, -1, count);
-}
-
-int l6msg_get_int_array_ptr(l6msg *msg, int fid, int **data, int *count)
-{ 
-    return l6msg_get_int32_array_ptr (msg, fid, (int32_t**)data, count); 
-}
-
-int l6msg_get_int64_array_ptr(l6msg *lmsg, int fid, long long int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)data, sizeof(int64_t), 0, -1, count);
-}
-
-int l6msg_get_long_array_ptr(l6msg *msg, int fid, long long int **data, int *count)
-{ 
-    return l6msg_get_int64_array_ptr (msg, fid, (int64_t**)data, count); 
-}
-
-int l6msg_get_float_array_ptr(l6msg *lmsg, int fid, float **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
-                        (void**)data, sizeof(float), 0, -1, count);
-}
-
-int l6msg_get_double_array_ptr(l6msg *lmsg, int fid, double **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
-                        (void**)data, sizeof(double), 0, -1, count);
-}
-
-//Get Array Pointers by name
-int l6msg_get_string_ptr_named(l6msg *lmsg, _const_char *key, 
-                                const char **data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int size;
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_STRING, 
-                        (void**)data, sizeof(char), 0, -1, &size);
-}
-
-int l6msg_get_byte_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    char **data, int *size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTES, 
-                        (void**)data, sizeof(char), 0, -1, size);
-}
-
-int l6msg_get_int16_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    short **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT_ARRAY, 
-                        (void**)data, sizeof(int16_t), 0, -1, count);
-}
-
-int l6msg_get_short_array_ptr_named(l6msg *msg, _const_char *key, 
-                                    short **data, int *count)
-{ 
-    return l6msg_get_int16_array_ptr_named (msg, key, (int16_t**)data, count); 
-}
-
-int l6msg_get_int32_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)data, sizeof(int32_t), 0, -1, count);
-}
-
-int l6msg_get_int_array_ptr_named(l6msg *msg, _const_char *key, 
-                                    int **data, int *count)
-{ 
-    return l6msg_get_int32_array_ptr_named (msg, key, (int32_t**)data, count); 
-}
-
-int l6msg_get_int64_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    long long int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)data, sizeof(int64_t), 0, -1, count);
-}
-
-int l6msg_get_long_array_ptr_named(l6msg *msg, _const_char *key, 
-                                    long long int **data, int *count)
-{ 
-    return l6msg_get_int64_array_ptr_named (msg, key, (int64_t**)data, count); 
-}
-
-int l6msg_get_float_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    float **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT_ARRAY, 
-                        (void**)data, sizeof(float), 0, -1, count);
-}
-
-int l6msg_get_double_array_ptr_named(l6msg *lmsg, _const_char *key, 
-                                    double **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE_ARRAY, 
-                        (void**)data, sizeof(double), 0, -1, count);
-}
-
-
-//Add fields
-int l6msg_add_int16(l6msg *lmsg, int16_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT, 
-                        &data, sizeof(int16_t), 1, msg->deep_copy);
-}
-
-int l6msg_add_short(l6msg *msg, short data)
-{ 
-    return l6msg_add_int16(msg, (int16_t) data); 
-}
-
-int l6msg_add_int32(l6msg *lmsg, int32_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT32, 
-                        &data, sizeof(int32_t), 1, msg->deep_copy);
-}
-
-int l6msg_add_int(l6msg *msg, int data)
-{ 
-    return l6msg_add_int32 (msg, (int32_t) data); 
-}
-
-int l6msg_add_int64(l6msg *lmsg, int64_t data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT64, 
-                        &data, sizeof(int64_t), 1, msg->deep_copy);
-}
-
-int l6msg_add_long(l6msg *msg, long long int data)
-{ 
-    return l6msg_add_int64(msg, (int64_t) data); 
-}
-
-int l6msg_add_float(l6msg *lmsg, float data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT, 
-                        &data, sizeof(float), 1, msg->deep_copy);
-}
-
-int l6msg_add_double(l6msg *lmsg, double data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE, 
-                        &data, sizeof(double), 1, msg->deep_copy);
-}
-
-
-int l6msg_add_string(l6msg *lmsg, char* data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    //md = 1 type + 2 len
-    return add_field_data_in_msg(msg, L6_DATATYPE_STRING, 
-                        data, sizeof(char), strlen(data)+1, msg->deep_copy);
-}
-
-int l6msg_add_byte_array(l6msg *lmsg, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_BYTES, 
-                        data, sizeof(char), size, msg->deep_copy);
-}
-
-int l6msg_add_int16_array(l6msg *lmsg, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT_ARRAY, 
-                        data, sizeof(int16_t), count, msg->deep_copy);
-}
-
-int l6msg_add_short_array(l6msg *msg, short *data, int count)
-{ 
-    return l6msg_add_int16_array (msg, (int16_t*) data, count); 
-}
-
-int l6msg_add_int32_array(l6msg *lmsg, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT32_ARRAY, 
-                        data, sizeof(int32_t), count, msg->deep_copy);
-}
-
-int l6msg_add_int_array(l6msg *msg, int *data, int count)
-{ 
-    return l6msg_add_int32_array (msg, (int32_t*) data, count); 
-}
-
-int l6msg_add_int64_array(l6msg *lmsg, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT64_ARRAY, 
-                        data, sizeof(int64_t), count, msg->deep_copy);
-}
-
-int l6msg_add_long_array(l6msg *msg, long long int *data, int count) 
-{ 
-    return l6msg_add_int64_array (msg, (int64_t*) data, count); 
-}
-
-int l6msg_add_float_array(l6msg *lmsg, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT_ARRAY, 
-                        data, sizeof(float), count, msg->deep_copy);
-}
-
-int l6msg_add_double_array(l6msg *lmsg, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE_ARRAY, 
-                        data, sizeof(double), count, msg->deep_copy);
-}
-
-int l6msg_add_layer6_msg(l6msg *lmsg, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_L6MSG, 
-                        (*data), 1, l6msg_size(data), msg->deep_copy);
-}
-
-//Array Pointers
-int l6msg_add_string_ptr(l6msg *lmsg, char *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_STRING, 
-                        data, 1, strlen(data)+1, 0);
-}
-
-int l6msg_add_byte_array_ptr(l6msg *lmsg, char *data, int size)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_BYTES, 
-                        data, 1, size, 0);
-}
-
-int l6msg_add_int16_array_ptr(l6msg *lmsg, int16_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT_ARRAY, 
-                        data, sizeof(int16_t), count, 0);
-}
-
-int l6msg_add_short_array_ptr(l6msg *msg, short *data, int count)
-{ 
-    return l6msg_add_int16_array_ptr (msg, (int16_t*) data, count); 
-}
-
-int l6msg_add_int32_array_ptr(l6msg *lmsg, int32_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT32_ARRAY, 
-                        data, sizeof(int32_t), count, 0);
-}
-
-int l6msg_add_int_array_ptr(l6msg *msg, int *data, int count)
-{ 
-    return l6msg_add_int32_array_ptr(msg, (int32_t*) data, count); 
-}
-
-int l6msg_add_int64_array_ptr(l6msg *lmsg, int64_t *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_INT64_ARRAY, 
-                        data, sizeof(int64_t), count, 0);
-}
-
-int l6msg_add_long_array_ptr(l6msg *msg, long long int *data, int count)
-{ 
-    return l6msg_add_int64_array_ptr (msg, (int64_t*) data, count); 
-}
-
-int l6msg_add_float_array_ptr(l6msg *lmsg, float *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT_ARRAY, 
-                        data, sizeof(float), count, 0);
-}
-
-int l6msg_add_double_array_ptr(l6msg *lmsg, double *data, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE_ARRAY, 
-                        data, sizeof(double), count, 0);
-}
-
-int l6msg_add_layer6_msg_ptr(l6msg *lmsg, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return add_field_data_in_msg(msg, L6_DATATYPE_L6MSG, 
-                        (*data), 1, l6msg_size(data), 0);
-}
-
-//Get Scalars by index
-int l6msg_get_int16_at_index(l6msg *lmsg, int index, int16_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16, 
-                        (void**)&data, sizeof(int16_t), 0, 1, &fcount);
-}
-
-int l6msg_get_short_at_index(l6msg *lmsg, int index, short *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT, 
-                        (void**)&data, sizeof(int16_t), 0, 1, &fcount);
-}
-
-int l6msg_get_int32_at_index(l6msg *lmsg, int index, int32_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
-                        (void**)&data, sizeof(int32_t), 0, 1, &fcount);
-}
-
-int l6msg_get_int_at_index(l6msg *lmsg, int index, int *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
-                        (void**)&data, sizeof(int32_t), 0, 1, &fcount);
-}
-
-int l6msg_get_int64_at_index(l6msg *lmsg, int index, int64_t *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
-                        (void**)&data, sizeof(int64_t), 0, 1, &fcount);
-}
-
-int l6msg_get_long_at_index(l6msg *lmsg, int index, long long int  *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
-                        (void**)&data, sizeof(int64_t), 0, 1, &fcount);
-}
-
-int l6msg_get_float_at_index(l6msg *lmsg, int index, float *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount = 0;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_FLOAT, 
-                        (void**)&data, sizeof(float), 0, 1, &fcount);
-}
-
-int l6msg_get_double_at_index(l6msg *lmsg, int index, double *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount = 0;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_DOUBLE, 
-                        (void**)&data, sizeof(double), 0, 1, &fcount);
-}
-
-int l6msg_get_string_at_index(l6msg *lmsg, int index, char *data, int len)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    int ret = get_field_data_in_msg_at_index(msg, index, 
-                    L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
-    if(ret >= 0)
-    {
-        data[len-1] = '\0';
-    }
-    return ret;
-}
-
-
-// Get Arrays By index
-int l6msg_get_byte_array_at_index(l6msg *lmsg, int index, 
-                                    char *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTES, 
-                        (void**)&data, sizeof(char), 0, count, &fcount);
-}
-
-int l6msg_get_int16_array_at_index(l6msg *lmsg, int index, 
-                                    int16_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16, 
-                        (void**)&data, sizeof(int16_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_short_array_at_index(l6msg *lmsg, int index, 
-                                    short *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16_ARRAY, 
-                        (void**)&data, sizeof(int16_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_int32_array_at_index(l6msg *lmsg, int index, 
-                                    int32_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)&data, sizeof(int32_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_int_array_at_index(l6msg *lmsg, int index, 
-                                    int *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
-                        (void**)&data, sizeof(int32_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_int64_array_at_index(l6msg *lmsg, int index, 
-                                    int64_t *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)&data, sizeof(int64_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_long_array_at_index(l6msg *lmsg, int index, 
-                                    long long int *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
-                        (void**)&data, sizeof(int64_t), 0, count, &fcount);
-}
-
-
-int l6msg_get_float_array_at_index(l6msg *lmsg, int index, 
-                                    float *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, 
-            L6_DATATYPE_FLOAT_ARRAY, (void**)&data, sizeof(float), 0, count, &fcount);
-}
-
-
-int l6msg_get_double_array_at_index(l6msg *lmsg, int index, 
-                                    double *data, int offset, int count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, 
-            L6_DATATYPE_DOUBLE_ARRAY, (void**)&data, sizeof(double), 0, count, &fcount);
-}
-
-int l6msg_get_layer6_msg_at_index(l6msg *lmsg, int index, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount;
-    return get_field_data_in_msg_at_index(msg, index, 
-                        L6_DATATYPE_L6MSG, (void**)&data, 1, 0, 0, &fcount);
-}
-
-//Get Array Pointers by index
-int l6msg_get_string_ptr_at_index(l6msg *lmsg, int index, const char **data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount = 0;
-    return get_field_data_in_msg_at_index(msg, index, 
-                        L6_DATATYPE_STRING, (void**)data, sizeof(char), 0, -1, &fcount);
-}
-
-int l6msg_get_byte_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        char **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT8_ARRAY, (void**)data, sizeof(char), 0, -1, count);
-}
-
-int l6msg_get_int16_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        int16_t **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT16_ARRAY, (void**)data, sizeof(int16_t), 0, -1, count);
-}
-
-int l6msg_get_short_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        short  **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT16_ARRAY, (void**)data, sizeof(int16_t), 0, -1, count);
-}
-
-int l6msg_get_int32_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        int32_t **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT32_ARRAY, (void**)data, sizeof(int32_t), 0, -1, count);
-}
-
-int l6msg_get_int_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT32_ARRAY, (void**)data, sizeof(int32_t), 0, -1, count);
-}
-
-int l6msg_get_int64_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        int64_t **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT64_ARRAY, (void**)data, sizeof(int64_t), 0, -1, count);
-}
-
-int l6msg_get_long_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        long long int **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_INT64_ARRAY, (void**)data, sizeof(int64_t), 0, -1, count);
-}
-
-int l6msg_get_float_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        float **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_FLOAT_ARRAY, (void**)data, sizeof(float), 0, -1, count);
-}
-
-int l6msg_get_double_array_ptr_at_index(l6msg *lmsg, int index, 
-                                        double **data, int *count)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_DOUBLE_ARRAY, (void**)data, sizeof(double), 0, -1, count);
-}
-
-int l6msg_get_layer6_msg_ptr_at_index(l6msg *lmsg, int index, l6msg *data)
-{
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    int fcount = 0;
-    return get_field_data_in_msg_at_index(msg, index, 
-                L6_DATATYPE_L6MSG, (void**)&data, sizeof(char), 0, -1, &fcount);
-}
-
 
 int l6msg_dup(l6msg *lmsrc, l6msg *lmdst) 
 {
@@ -4448,4 +3020,1596 @@ int l6msg_is_field_array_at_index(l6msg *lmsg, int index)
     return ret;
 }
 
+//VARARGS get/set convenience methods
+int l6msg_setf(l6msg *lmsg, const char *fmt, ...)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    msg->error_code = L6_ERR_NOT_IMPLEMENTED;
+    if(_SET_DEBUG_INFO) 
+        sprintf_debug_info(msg, __LINE__, 
+            "VARARGS set/get not yet implemented");
+    return -1;
+}
 
+int l6msg_getf(l6msg *lmsg, const char *fmt, ...)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    msg->error_code = L6_ERR_NOT_IMPLEMENTED;
+    if(_SET_DEBUG_INFO) 
+        sprintf_debug_info(msg, __LINE__, 
+            "VARARGS set/get not yet implemented");
+    return -1;
+}
+
+
+/*********************************** GET/SET DATA FUNCTIONS *****************************/
+
+/*
+#define __CONCAT(...) __VA_ARGS__
+
+#define DEF_SET_FIELD_VAL(SETADD, TYPENAME, TYPECODE, TYPE, DATASIZE, BYREFORVAL, ACCESS, KEYTYPE, KEY, KEYVAL) \
+int l6msg_##SETADD##BYREFORVAL##_##TYPENAME##ACCESS##(l6msg *lmsg, __CONCAT(KEYTYPE KEY, TYPE) data)            \
+{                                                                                                               \
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);                                                                 \
+    return set_field_data_in_msg_ret##ACCESS##(msg, __CONCAT(KEY,KEYVAL), TYPECODE, &data, DATASIZE, 1, msg->deep_copy); \
+}
+
+DEF_SET_FIELD_VAL(add, byte, L6_DATATYPE_BYTE, char, 1,,,,, -1)
+*/
+
+//Maybe auto-generated code
+
+int l6msg_set_int16(l6msg *lmsg, int fid, int16_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_SHORT, 
+                            &data, sizeof(int16_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_short(l6msg *msg, int fid, short data)
+{ 
+    return l6msg_set_int16(msg, fid, (int16_t) data); 
+}
+
+int l6msg_set_int32(l6msg *lmsg, int fid, int32_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT32, 
+                            &data, sizeof(int32_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_int(l6msg *msg, int fid, int data)
+{ 
+    return l6msg_set_int32 (msg, fid, (int32_t) data); 
+}
+
+int l6msg_set_int64(l6msg *lmsg, int fid, int64_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT64, 
+                            &data, sizeof(int64_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_long(l6msg *msg, int fid, long long int data)
+{ 
+    return l6msg_set_int64(msg, fid, (int64_t) data); 
+}
+
+int l6msg_set_float(l6msg *lmsg, int fid, float data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_FLOAT, 
+                            &data, sizeof(float), 1, msg->deep_copy);
+}
+
+int l6msg_set_double(l6msg *lmsg, int fid, double data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_DOUBLE, 
+                    &data, sizeof(double), 1, msg->deep_copy);
+}
+
+//By Index
+int l6msg_set_int16_at_index(l6msg *lmsg, int index, int16_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT, 
+                    &data, sizeof(int16_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_short_at_index(l6msg *msg, int index, short data)
+{ 
+    return l6msg_set_int16_at_index(msg, index, (int16_t) data); 
+}
+
+int l6msg_set_int32_at_index(l6msg *lmsg, int index, int32_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
+                    &data, sizeof(int32_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_int_at_index(l6msg *msg, int index, int data)
+{ 
+    return l6msg_set_int32_at_index (msg, index, (int32_t) data); 
+}
+
+int l6msg_set_int64_at_index(l6msg *lmsg, int index, int64_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
+                            &data, sizeof(int64_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_long_at_index(l6msg *msg, int index, long long int data)
+{ 
+    return l6msg_set_int64_at_index (msg, index, (int64_t) data); 
+}
+
+int l6msg_set_float_at_index(l6msg *lmsg, int index, float data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_FLOAT, 
+                            &data, sizeof(float), 1, msg->deep_copy);
+}
+
+int l6msg_set_double_at_index(l6msg *lmsg, int index, double data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_DOUBLE, 
+                            &data, sizeof(double), 1, msg->deep_copy);
+}
+
+//Arrays
+int l6msg_set_string_at_index(l6msg *lmsg, int index, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    //md = 1 type + 2 len
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_STRING, 
+                        (char*)data, 1, strlen(data)+1, msg->deep_copy);
+}
+
+int l6msg_set_byte_array_at_index(l6msg *lmsg, int index, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTES, 
+                            data, sizeof(char), size, msg->deep_copy);
+}
+
+int l6msg_set_int16_array_at_index(l6msg *lmsg, int index, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT_ARRAY, 
+                            data, sizeof(int16_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_short_array_at_index(l6msg *msg, int index, short *data, int count)
+{ 
+    return l6msg_set_int16_array_at_index(msg, index, (int16_t*) data, count); 
+}
+
+int l6msg_set_int32_array_at_index(l6msg *lmsg, int index, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
+                            data, sizeof(int32_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_int_array_at_index(l6msg *msg, int index, int *data, int count)
+{ 
+    return l6msg_set_int32_array_at_index(msg, index, (int32_t*) data, count); 
+}
+
+int l6msg_set_int64_array_at_index(l6msg *lmsg, int index, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
+                            data, sizeof(int64_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_long_array_at_index(l6msg *msg, int index, long long int *data, int count) 
+{ 
+    return l6msg_set_int64_array_at_index(msg, index, (int64_t*) data, count); 
+}
+
+int l6msg_set_float_array_at_index(l6msg *lmsg, int index, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, msg->deep_copy);
+}
+
+int l6msg_set_double_array_at_index(l6msg *lmsg, int index, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, msg->deep_copy);
+}
+
+int l6msg_set_layer6_msg_at_index(l6msg *lmsg, int index, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), msg->deep_copy);
+}
+
+//Array Pointers
+int l6msg_set_string_ptr_at_index(l6msg *lmsg, int index, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, 0);
+}
+
+int l6msg_set_byte_array_ptr_at_index(l6msg *lmsg, int index, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                        L6_DATATYPE_BYTES, data, 1, size, 0);
+}
+
+int l6msg_set_int16_array_ptr_at_index(l6msg *lmsg, int index, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
+}
+
+inline int l6msg_set_short_array_ptr_at_index(l6msg *msg, int index, short *data, int count)
+{ 
+    return l6msg_set_int16_array_ptr_at_index(msg, index, 
+                                    (int16_t*) data, count); 
+}
+
+int l6msg_set_int32_array_ptr_at_index(l6msg *lmsg, int index, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
+}
+
+inline int l6msg_set_int_array_ptr_at_index(l6msg *msg, int index, int *data, int count)
+{ 
+    return l6msg_set_int32_array_ptr_at_index(msg, index, 
+                                    (int32_t*) data, count); 
+}
+
+int l6msg_set_int64_array_ptr_at_index(l6msg *lmsg, int index, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
+}
+
+inline int l6msg_set_long_array_ptr_at_index(l6msg *msg, int index, long long int *data, int count)
+{ 
+    return l6msg_set_int64_array_ptr_at_index(msg, index, (int64_t*) data, count); 
+}
+
+int l6msg_set_float_array_ptr_at_index(l6msg *lmsg, int index, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
+}
+
+int l6msg_set_double_array_ptr_at_index(l6msg *lmsg, int index, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, 0);
+}
+
+int l6msg_set_layer6_msg_ptr_at_index(l6msg *lmsg, int index, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
+}
+
+
+//By Name
+int l6msg_set_int16_named(l6msg *lmsg, _const_char *key, int16_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                    L6_DATATYPE_SHORT, &data, sizeof(int16_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_short_named(l6msg *msg, _const_char *key, short data)
+{ 
+    return l6msg_set_int16_named(msg, key, (int16_t) data); 
+}
+
+int l6msg_set_int32_named(l6msg *lmsg, _const_char *key, int32_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT32, &data, sizeof(int32_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_int_named(l6msg *msg, _const_char *key, int data)
+{ 
+    return l6msg_set_int32_named (msg, key, (int32_t) data); 
+}
+
+int l6msg_set_int64_named(l6msg *lmsg, _const_char *key, int64_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT64, &data, sizeof(int64_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_set_long_named(l6msg *msg, _const_char *key, long long int data)
+{ 
+    return l6msg_set_int64_named (msg, key, (int64_t) data); 
+}
+
+int l6msg_set_float_named(l6msg *lmsg, _const_char *key, float data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_FLOAT, &data, sizeof(float), 1, msg->deep_copy);
+}
+
+int l6msg_set_double_named(l6msg *lmsg, _const_char *key, double data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_DOUBLE, &data, sizeof(double), 1, msg->deep_copy);
+}
+
+//Arrays
+int l6msg_set_string(l6msg *lmsg, int fid, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    //md = 1 type + 2 len
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_STRING, 
+                                (char*)data, 1, strlen(data)+1, msg->deep_copy);
+}
+
+int l6msg_set_byte_array(l6msg *lmsg, int fid, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_BYTES, 
+                                    data, sizeof(char), size, msg->deep_copy);
+}
+
+int l6msg_set_int16_array(l6msg *lmsg, int fid, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
+                                    data, sizeof(int16_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_short_array(l6msg *msg, int fid, short *data, int count)
+{ 
+    return l6msg_set_int16_array (msg, fid, (int16_t*) data, count); 
+}
+
+int l6msg_set_int32_array(l6msg *lmsg, int fid, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
+                                    data, sizeof(int32_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_int_array(l6msg *msg, int fid, int *data, int count)
+{ 
+    return l6msg_set_int32_array (msg, fid, (int32_t*) data, count); 
+}
+
+int l6msg_set_int64_array(l6msg *lmsg, int fid, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
+                                    data, sizeof(int64_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_long_array(l6msg *msg, int fid, long long int *data, int count) 
+{ 
+    return l6msg_set_int64_array (msg, fid, (int64_t*) data, count); 
+}
+
+int l6msg_set_float_array(l6msg *lmsg, int fid, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
+                                    data, sizeof(float), count, msg->deep_copy);
+}
+
+int l6msg_set_double_array(l6msg *lmsg, int fid, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
+                                    data, sizeof(double), count, msg->deep_copy);
+}
+
+int l6msg_set_layer6_msg(l6msg *lmsg, int fid, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_L6MSG, 
+                                (*data), 1, l6msg_size(data), msg->deep_copy);
+}
+
+//Array Pointers
+int l6msg_set_string_ptr(l6msg *lmsg, int fid, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_STRING, 
+                                            (char*)data, 1, strlen(data)+1, 0);
+}
+
+int l6msg_set_byte_array_ptr(l6msg *lmsg, int fid, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_BYTES, data, 1, size, 0);
+}
+
+int l6msg_set_int16_array_ptr(l6msg *lmsg, int fid, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
+}
+
+inline int l6msg_set_short_array_ptr(l6msg *msg, int fid, short *data, int count)
+{ 
+    return l6msg_set_int16_array_ptr (msg, fid, (int16_t*) data, count); 
+}
+
+int l6msg_set_int32_array_ptr(l6msg *lmsg, int fid, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
+}
+
+inline int l6msg_set_int_array_ptr(l6msg *msg, int fid, int *data, int count)
+{ 
+    return l6msg_set_int32_array_ptr (msg, fid, (int32_t*) data, count); 
+}
+
+int l6msg_set_int64_array_ptr(l6msg *lmsg, int fid, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
+}
+
+inline int l6msg_set_long_array_ptr(l6msg *msg, int fid, long long int *data, int count)
+{ 
+    return l6msg_set_int64_array_ptr (msg, fid, (int64_t*) data, count); 
+}
+
+int l6msg_set_float_array_ptr(l6msg *lmsg, int fid, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
+}
+
+int l6msg_set_double_array_ptr(l6msg *lmsg, int fid, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, 0);
+}
+
+int l6msg_set_layer6_msg_ptr(l6msg *lmsg, int fid, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_with_id(msg, fid, 
+                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
+}
+
+
+//Arrays by name
+int l6msg_set_string_named(l6msg *lmsg, _const_char *key, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, msg->deep_copy);
+}
+
+int l6msg_set_byte_array_named(l6msg *lmsg, _const_char *key, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_BYTES, data, sizeof(char), size, msg->deep_copy);
+}
+
+int l6msg_set_int16_array_named(l6msg *lmsg, _const_char *key, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_short_array_named(l6msg *msg, _const_char *key, short *data, int count)
+{ 
+    return l6msg_set_int16_array_named (msg, key, (int16_t*) data, count); 
+}
+
+int l6msg_set_int32_array_named(l6msg *lmsg, _const_char *key, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_int_array_named(l6msg *msg, _const_char *key, int  *data, int count)
+{ 
+    return l6msg_set_int32_array_named (msg, key, (int32_t*) data, count); 
+}
+
+int l6msg_set_int64_array_named(l6msg *lmsg, _const_char *key, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, msg->deep_copy);
+}
+
+inline int l6msg_set_long_array_named(l6msg *msg, _const_char *key, long long int *data, int count)
+{ 
+    return l6msg_set_int64_array_named (msg, key, (int64_t*) data, count); 
+}
+
+int l6msg_set_float_array_named(l6msg *lmsg, _const_char *key, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, msg->deep_copy);
+}
+
+int l6msg_set_double_array_named(l6msg *lmsg, _const_char *key, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, msg->deep_copy);
+}
+
+int l6msg_set_layer6_msg_named(l6msg *lmsg, _const_char *key, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), msg->deep_copy);
+}
+
+//Array Pointers by name
+int l6msg_set_string_ptr_named(l6msg *lmsg, _const_char *key, const char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_STRING, (char*)data, 1, strlen(data)+1, 0);
+}
+
+int l6msg_set_byte_array_ptr_named(l6msg *lmsg, _const_char *key, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_BYTES, data, sizeof(char), size, 0);
+}
+
+int l6msg_set_int16_array_ptr_named(l6msg *lmsg, _const_char *key, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_SHORT_ARRAY, data, sizeof(int16_t), count, 0);
+}
+
+inline int l6msg_set_short_array_ptr_named(l6msg *msg, _const_char *key, short *data, int count)
+{ 
+    return l6msg_set_int16_array_ptr_named (msg, key, (int16_t*)data, count); 
+}
+
+int l6msg_set_int32_array_ptr_named(l6msg *lmsg, _const_char *key, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT32_ARRAY, data, sizeof(int32_t), count, 0);
+}
+
+inline int l6msg_set_int_array_ptr_named(l6msg *msg, _const_char *key, int *data, int count)     
+{ 
+    return l6msg_set_int32_array_ptr_named (msg, key, (int32_t*)data, count); 
+}
+
+int l6msg_set_int64_array_ptr_named(l6msg *lmsg, _const_char *key, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_INT64_ARRAY, data, sizeof(int64_t), count, 0);
+}
+
+inline int l6msg_set_long_array_ptr_named    (l6msg *msg, _const_char *key, long long int *data, int count)  
+{ 
+    return l6msg_set_int64_array_ptr_named (msg, key, (int64_t*)data, count); 
+}
+
+int l6msg_set_float_array_ptr_named(l6msg *lmsg, _const_char *key, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_FLOAT_ARRAY, data, sizeof(float), count, 0);
+}
+
+int l6msg_set_double_array_ptr_named(l6msg *lmsg, _const_char *key, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_DOUBLE_ARRAY, &data, sizeof(double), count, 0);
+}
+
+int l6msg_set_layer6_msg_ptr_named(l6msg *lmsg, _const_char *key, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return set_field_data_in_msg_named(msg, key,  
+                L6_DATATYPE_L6MSG, (*data), 1, l6msg_size(data), 0);
+}
+
+//Get Scalars
+int l6msg_get_int16(l6msg *lmsg, int fid, int16_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT, 
+                            (void**)&data, sizeof(int16_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_short(l6msg *msg, int fid, short *data)
+{ 
+    return l6msg_get_int16 (msg, fid, (int16_t*)data); 
+}
+
+int l6msg_get_int32(l6msg *lmsg, int fid, int32_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32, 
+                            (void**)&data, sizeof(int32_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_int(l6msg *msg, int fid, int *data) 
+{ 
+    return l6msg_get_int32 (msg, fid, (int32_t*)data); 
+}
+
+int l6msg_get_int64(l6msg *lmsg, int fid, int64_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64, 
+                            (void**)&data, sizeof(int64_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_long(l6msg *msg, int fid, long long int *data)
+{ 
+    return l6msg_get_int64 (msg, fid, (int64_t*)data); 
+}
+
+int l6msg_get_float(l6msg *lmsg, int fid, float *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT, 
+                            (void**)&data, sizeof(float), 0, 1, &fcount);
+}
+
+int l6msg_get_double(l6msg *lmsg, int fid, double *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE, 
+                            (void**)&data, sizeof(double), 0, 1, &fcount);
+}
+
+//Get Scalars by name
+int l6msg_get_int16_named(l6msg *lmsg, _const_char *key, int16_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT, 
+                            (void**)&data, sizeof(int16_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_short_named(l6msg *msg, _const_char *key, short *data)
+{ 
+    return l6msg_get_int16_named (msg, key, (int16_t*)data); 
+}
+
+int l6msg_get_int32_named(l6msg *lmsg, _const_char *key, int32_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32, 
+                            (void**)&data, sizeof(int32_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_int_named(l6msg *msg, _const_char *key, int *data)
+{ 
+    return l6msg_get_int32_named (msg, key, (int32_t*)data); 
+}
+
+int l6msg_get_int64_named(l6msg *lmsg, _const_char *key, int64_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64, 
+                            (void**)&data, sizeof(int64_t), 0, 1, &fcount);
+}
+
+inline int l6msg_get_long_named(l6msg *msg, _const_char *key, long long int *data)
+{ 
+    return l6msg_get_int64_named (msg, key, (int64_t*)data); 
+}
+
+int l6msg_get_float_named(l6msg *lmsg, _const_char *key, float *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT, 
+                            (void**)&data, sizeof(float), 0, 1, &fcount);
+}
+
+int l6msg_get_double_named(l6msg *lmsg, _const_char *key, double *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE, 
+                            (void**)&data, sizeof(double), 0, 1, &fcount);
+}
+
+
+// Get Arrays
+int l6msg_get_string(l6msg *lmsg, int fid, char *data, int len)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    int ret = get_field_data_in_msg_by_id(msg, fid, 
+                L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
+    if(ret >= 0)
+    {
+        data[len-1] = '\0';
+    }
+    return ret;
+}
+
+int l6msg_get_byte_array(l6msg *lmsg, int fid, char *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_BYTES, 
+                        (void**)&data, sizeof(char), 0, count, &fcount);
+}
+
+int l6msg_get_int16_array(l6msg *lmsg, int fid, int16_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
+                        (void**)&data, sizeof(int16_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_short_array(l6msg *msg, int fid, short *data, int offset, int count)  
+{ 
+    return l6msg_get_int16_array (msg, fid, (int16_t*)data, offset, count); 
+}
+
+int l6msg_get_int32_array(l6msg *lmsg, int fid, int32_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)&data, sizeof(int32_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_int_array(l6msg *msg, int fid, int *data, int offset, int count)  
+{ 
+    return l6msg_get_int32_array (msg, fid, (int32_t*)data, offset, count); 
+}
+
+int l6msg_get_int64_array(l6msg *lmsg, int fid, int64_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)&data, sizeof(int64_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_long_array(l6msg *msg, int fid, 
+                        long long int *data, int offset, int count)
+{ 
+    return l6msg_get_int64_array (msg, fid, (int64_t*)data, offset, count); 
+}
+
+int l6msg_get_float_array(l6msg *lmsg, int fid, float *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
+                        (void**)&data, sizeof(float), offset, count, &fcount);
+}
+
+int l6msg_get_double_array(l6msg *lmsg, int fid, double *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
+                        (void**)&data, sizeof(double), offset, count, &fcount);
+}
+
+int l6msg_get_layer6_msg(l6msg *lmsg, int fid, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_L6MSG, 
+                        (void**)&data, 1, 0, 1, &fcount);
+}
+
+int l6msg_get_layer6_msg_ptr(l6msg *lmsg, int fid, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_L6MSG, 
+                        (void**)&data, 1, 0, -1, &fcount);
+}
+
+//Get Arrays By Name
+int l6msg_get_string_named(l6msg *lmsg, _const_char *key, char *data, int len)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    int ret = get_field_data_in_msg_named(msg, key, 
+                L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
+    if(ret >= 0)
+    {
+        data[len-1] = '\0';
+    }
+    return ret;
+}
+
+int l6msg_get_byte_array_named(l6msg *lmsg, _const_char *key, 
+                                char *data, int offset, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTES, 
+                        (void**)&data, sizeof(char), offset, size, &fcount);
+}
+
+int l6msg_get_int16_array_named(l6msg *lmsg, _const_char *key, 
+                                int16_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT_ARRAY, 
+                        (void**)&data, sizeof(int16_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_short_array_named(l6msg *msg, _const_char *key, 
+                                short *data, int offset, int count) 
+{ 
+    return l6msg_get_int16_array_named(msg,key,(int16_t*)data,offset,count); 
+}
+
+int l6msg_get_int32_array_named(l6msg *lmsg, _const_char *key, 
+                                int32_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)&data, sizeof(int32_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_int_array_named(l6msg *msg, _const_char *key, 
+                                int *data, int offset, int count) 
+{ 
+    return l6msg_get_int32_array_named(msg,key,(int32_t*)data,offset,count); 
+}
+
+int l6msg_get_int64_array_named(l6msg *lmsg, _const_char *key, 
+                                int64_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)&data, sizeof(int64_t), offset, count, &fcount);
+}
+
+inline int l6msg_get_long_array_named(l6msg *msg, _const_char *key, 
+                                long long int *data, int offset, int count)
+{ 
+    return l6msg_get_int64_array_named(msg,key,(int64_t*)data, offset, count); 
+}
+
+int l6msg_get_float_array_named(l6msg *lmsg, _const_char *key, 
+                                float *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT_ARRAY, 
+                        (void**)&data, sizeof(float), offset, count, &fcount);
+}
+
+int l6msg_get_double_array_named(l6msg *lmsg, _const_char *key, 
+                                double *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE_ARRAY, 
+                        (void**)&data, sizeof(double), offset, count, &fcount);
+}
+
+int l6msg_get_layer6_msg_named(l6msg *lmsg, _const_char *key, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_L6MSG, 
+                        (void**)&data, sizeof(char), 0, 0, &fcount);
+}
+
+int l6msg_get_layer6_msg_ptr_named(l6msg *lmsg, _const_char *key, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_L6MSG, 
+                        (void**)&data, sizeof(char), 0, -1, &fcount);
+}
+
+//Get Array Pointers
+int l6msg_get_string_ptr(l6msg *lmsg, int fid, const char **data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int size;
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_STRING, 
+                        (void**)data, sizeof(char), 0, -1, &size);
+}
+
+int l6msg_get_byte_array_ptr(l6msg *lmsg, int fid, char **data, int *size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_BYTES, 
+                        (void**)data, sizeof(char), 0, -1, size);
+}
+
+int l6msg_get_int16_array_ptr(l6msg *lmsg, int fid, short **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_SHORT_ARRAY, 
+                        (void**)data, sizeof(int16_t), 0, -1, count);
+}
+
+inline int l6msg_get_short_array_ptr(l6msg *msg, int fid, short **data, int *count)     
+{ 
+    return l6msg_get_int16_array_ptr (msg, fid, (int16_t**)data, count); 
+}
+
+int l6msg_get_int32_array_ptr(l6msg *lmsg, int fid, int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)data, sizeof(int32_t), 0, -1, count);
+}
+
+inline int l6msg_get_int_array_ptr(l6msg *msg, int fid, int **data, int *count)
+{ 
+    return l6msg_get_int32_array_ptr (msg, fid, (int32_t**)data, count); 
+}
+
+int l6msg_get_int64_array_ptr(l6msg *lmsg, int fid, long long int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)data, sizeof(int64_t), 0, -1, count);
+}
+
+inline int l6msg_get_long_array_ptr(l6msg *msg, int fid, long long int **data, int *count)
+{ 
+    return l6msg_get_int64_array_ptr (msg, fid, (int64_t**)data, count); 
+}
+
+int l6msg_get_float_array_ptr(l6msg *lmsg, int fid, float **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_FLOAT_ARRAY, 
+                        (void**)data, sizeof(float), 0, -1, count);
+}
+
+int l6msg_get_double_array_ptr(l6msg *lmsg, int fid, double **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_DOUBLE_ARRAY, 
+                        (void**)data, sizeof(double), 0, -1, count);
+}
+
+//Get Array Pointers by name
+int l6msg_get_string_ptr_named(l6msg *lmsg, _const_char *key, 
+                                const char **data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int size;
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_STRING, 
+                        (void**)data, sizeof(char), 0, -1, &size);
+}
+
+int l6msg_get_byte_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    char **data, int *size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTES, 
+                        (void**)data, sizeof(char), 0, -1, size);
+}
+
+int l6msg_get_int16_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    short **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_SHORT_ARRAY, 
+                        (void**)data, sizeof(int16_t), 0, -1, count);
+}
+
+inline int l6msg_get_short_array_ptr_named(l6msg *msg, _const_char *key, 
+                                    short **data, int *count)
+{ 
+    return l6msg_get_int16_array_ptr_named (msg, key, (int16_t**)data, count); 
+}
+
+int l6msg_get_int32_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)data, sizeof(int32_t), 0, -1, count);
+}
+
+inline int l6msg_get_int_array_ptr_named(l6msg *msg, _const_char *key, 
+                                    int **data, int *count)
+{ 
+    return l6msg_get_int32_array_ptr_named (msg, key, (int32_t**)data, count); 
+}
+
+int l6msg_get_int64_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    long long int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)data, sizeof(int64_t), 0, -1, count);
+}
+
+inline int l6msg_get_long_array_ptr_named(l6msg *msg, _const_char *key, 
+                                    long long int **data, int *count)
+{ 
+    return l6msg_get_int64_array_ptr_named (msg, key, (int64_t**)data, count); 
+}
+
+int l6msg_get_float_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    float **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_FLOAT_ARRAY, 
+                        (void**)data, sizeof(float), 0, -1, count);
+}
+
+int l6msg_get_double_array_ptr_named(l6msg *lmsg, _const_char *key, 
+                                    double **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_named(msg, key, L6_DATATYPE_DOUBLE_ARRAY, 
+                        (void**)data, sizeof(double), 0, -1, count);
+}
+
+
+//Add fields
+int l6msg_add_int16(l6msg *lmsg, int16_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT, 
+                        &data, sizeof(int16_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_add_short(l6msg *msg, short data)
+{ 
+    return l6msg_add_int16(msg, (int16_t) data); 
+}
+
+int l6msg_add_int32(l6msg *lmsg, int32_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT32, 
+                        &data, sizeof(int32_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_add_int(l6msg *msg, int data)
+{ 
+    return l6msg_add_int32 (msg, (int32_t) data); 
+}
+
+int l6msg_add_int64(l6msg *lmsg, int64_t data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT64, 
+                        &data, sizeof(int64_t), 1, msg->deep_copy);
+}
+
+inline int l6msg_add_long(l6msg *msg, long long int data)
+{ 
+    return l6msg_add_int64(msg, (int64_t) data); 
+}
+
+int l6msg_add_float(l6msg *lmsg, float data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT, 
+                        &data, sizeof(float), 1, msg->deep_copy);
+}
+
+int l6msg_add_double(l6msg *lmsg, double data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE, 
+                        &data, sizeof(double), 1, msg->deep_copy);
+}
+
+
+int l6msg_add_string(l6msg *lmsg, char* data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    //md = 1 type + 2 len
+    return add_field_data_in_msg(msg, L6_DATATYPE_STRING, 
+                        data, sizeof(char), strlen(data)+1, msg->deep_copy);
+}
+
+int l6msg_add_byte_array(l6msg *lmsg, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_BYTES, 
+                        data, sizeof(char), size, msg->deep_copy);
+}
+
+int l6msg_add_int16_array(l6msg *lmsg, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT_ARRAY, 
+                        data, sizeof(int16_t), count, msg->deep_copy);
+}
+
+inline int l6msg_add_short_array(l6msg *msg, short *data, int count)
+{ 
+    return l6msg_add_int16_array (msg, (int16_t*) data, count); 
+}
+
+int l6msg_add_int32_array(l6msg *lmsg, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT32_ARRAY, 
+                        data, sizeof(int32_t), count, msg->deep_copy);
+}
+
+inline int l6msg_add_int_array(l6msg *msg, int *data, int count)
+{ 
+    return l6msg_add_int32_array (msg, (int32_t*) data, count); 
+}
+
+int l6msg_add_int64_array(l6msg *lmsg, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT64_ARRAY, 
+                        data, sizeof(int64_t), count, msg->deep_copy);
+}
+
+inline int l6msg_add_long_array(l6msg *msg, long long int *data, int count) 
+{ 
+    return l6msg_add_int64_array (msg, (int64_t*) data, count); 
+}
+
+int l6msg_add_float_array(l6msg *lmsg, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT_ARRAY, 
+                        data, sizeof(float), count, msg->deep_copy);
+}
+
+int l6msg_add_double_array(l6msg *lmsg, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE_ARRAY, 
+                        data, sizeof(double), count, msg->deep_copy);
+}
+
+int l6msg_add_layer6_msg(l6msg *lmsg, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_L6MSG, 
+                        (*data), 1, l6msg_size(data), msg->deep_copy);
+}
+
+//Array Pointers
+int l6msg_add_string_ptr(l6msg *lmsg, char *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_STRING, 
+                        data, 1, strlen(data)+1, 0);
+}
+
+int l6msg_add_byte_array_ptr(l6msg *lmsg, char *data, int size)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_BYTES, 
+                        data, 1, size, 0);
+}
+
+int l6msg_add_int16_array_ptr(l6msg *lmsg, int16_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_SHORT_ARRAY, 
+                        data, sizeof(int16_t), count, 0);
+}
+
+inline int l6msg_add_short_array_ptr(l6msg *msg, short *data, int count)
+{ 
+    return l6msg_add_int16_array_ptr (msg, (int16_t*) data, count); 
+}
+
+int l6msg_add_int32_array_ptr(l6msg *lmsg, int32_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT32_ARRAY, 
+                        data, sizeof(int32_t), count, 0);
+}
+
+inline int l6msg_add_int_array_ptr(l6msg *msg, int *data, int count)
+{ 
+    return l6msg_add_int32_array_ptr(msg, (int32_t*) data, count); 
+}
+
+int l6msg_add_int64_array_ptr(l6msg *lmsg, int64_t *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_INT64_ARRAY, 
+                        data, sizeof(int64_t), count, 0);
+}
+
+inline int l6msg_add_long_array_ptr(l6msg *msg, long long int *data, int count)
+{ 
+    return l6msg_add_int64_array_ptr (msg, (int64_t*) data, count); 
+}
+
+int l6msg_add_float_array_ptr(l6msg *lmsg, float *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_FLOAT_ARRAY, 
+                        data, sizeof(float), count, 0);
+}
+
+int l6msg_add_double_array_ptr(l6msg *lmsg, double *data, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_DOUBLE_ARRAY, 
+                        data, sizeof(double), count, 0);
+}
+
+int l6msg_add_layer6_msg_ptr(l6msg *lmsg, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return add_field_data_in_msg(msg, L6_DATATYPE_L6MSG, 
+                        (*data), 1, l6msg_size(data), 0);
+}
+
+//Get Scalars by index
+int l6msg_get_int16_at_index(l6msg *lmsg, int index, int16_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16, 
+                        (void**)&data, sizeof(int16_t), 0, 1, &fcount);
+}
+
+int l6msg_get_short_at_index(l6msg *lmsg, int index, short *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_SHORT, 
+                        (void**)&data, sizeof(int16_t), 0, 1, &fcount);
+}
+
+int l6msg_get_int32_at_index(l6msg *lmsg, int index, int32_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
+                        (void**)&data, sizeof(int32_t), 0, 1, &fcount);
+}
+
+int l6msg_get_int_at_index(l6msg *lmsg, int index, int *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32, 
+                        (void**)&data, sizeof(int32_t), 0, 1, &fcount);
+}
+
+int l6msg_get_int64_at_index(l6msg *lmsg, int index, int64_t *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
+                        (void**)&data, sizeof(int64_t), 0, 1, &fcount);
+}
+
+int l6msg_get_long_at_index(l6msg *lmsg, int index, long long int  *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64, 
+                        (void**)&data, sizeof(int64_t), 0, 1, &fcount);
+}
+
+int l6msg_get_float_at_index(l6msg *lmsg, int index, float *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount = 0;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_FLOAT, 
+                        (void**)&data, sizeof(float), 0, 1, &fcount);
+}
+
+int l6msg_get_double_at_index(l6msg *lmsg, int index, double *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount = 0;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_DOUBLE, 
+                        (void**)&data, sizeof(double), 0, 1, &fcount);
+}
+
+int l6msg_get_string_at_index(l6msg *lmsg, int index, char *data, int len)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    int ret = get_field_data_in_msg_at_index(msg, index, 
+                    L6_DATATYPE_STRING, (void**)&data, 1, 0, len, &fcount);
+    if(ret >= 0)
+    {
+        data[len-1] = '\0';
+    }
+    return ret;
+}
+
+
+// Get Arrays By index
+int l6msg_get_byte_array_at_index(l6msg *lmsg, int index, 
+                                    char *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTES, 
+                        (void**)&data, sizeof(char), 0, count, &fcount);
+}
+
+int l6msg_get_int16_array_at_index(l6msg *lmsg, int index, 
+                                    int16_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16, 
+                        (void**)&data, sizeof(int16_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_short_array_at_index(l6msg *lmsg, int index, 
+                                    short *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT16_ARRAY, 
+                        (void**)&data, sizeof(int16_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_int32_array_at_index(l6msg *lmsg, int index, 
+                                    int32_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)&data, sizeof(int32_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_int_array_at_index(l6msg *lmsg, int index, 
+                                    int *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT32_ARRAY, 
+                        (void**)&data, sizeof(int32_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_int64_array_at_index(l6msg *lmsg, int index, 
+                                    int64_t *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)&data, sizeof(int64_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_long_array_at_index(l6msg *lmsg, int index, 
+                                    long long int *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_INT64_ARRAY, 
+                        (void**)&data, sizeof(int64_t), 0, count, &fcount);
+}
+
+
+int l6msg_get_float_array_at_index(l6msg *lmsg, int index, 
+                                    float *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, 
+            L6_DATATYPE_FLOAT_ARRAY, (void**)&data, sizeof(float), 0, count, &fcount);
+}
+
+
+int l6msg_get_double_array_at_index(l6msg *lmsg, int index, 
+                                    double *data, int offset, int count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, 
+            L6_DATATYPE_DOUBLE_ARRAY, (void**)&data, sizeof(double), 0, count, &fcount);
+}
+
+int l6msg_get_layer6_msg_at_index(l6msg *lmsg, int index, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount;
+    return get_field_data_in_msg_at_index(msg, index, 
+                        L6_DATATYPE_L6MSG, (void**)&data, 1, 0, 0, &fcount);
+}
+
+//Get Array Pointers by index
+int l6msg_get_string_ptr_at_index(l6msg *lmsg, int index, const char **data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount = 0;
+    return get_field_data_in_msg_at_index(msg, index, 
+                        L6_DATATYPE_STRING, (void**)data, sizeof(char), 0, -1, &fcount);
+}
+
+int l6msg_get_byte_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        char **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT8_ARRAY, (void**)data, sizeof(char), 0, -1, count);
+}
+
+int l6msg_get_int16_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        int16_t **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT16_ARRAY, (void**)data, sizeof(int16_t), 0, -1, count);
+}
+
+int l6msg_get_short_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        short  **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT16_ARRAY, (void**)data, sizeof(int16_t), 0, -1, count);
+}
+
+int l6msg_get_int32_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        int32_t **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT32_ARRAY, (void**)data, sizeof(int32_t), 0, -1, count);
+}
+
+int l6msg_get_int_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT32_ARRAY, (void**)data, sizeof(int32_t), 0, -1, count);
+}
+
+int l6msg_get_int64_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        int64_t **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT64_ARRAY, (void**)data, sizeof(int64_t), 0, -1, count);
+}
+
+int l6msg_get_long_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        long long int **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_INT64_ARRAY, (void**)data, sizeof(int64_t), 0, -1, count);
+}
+
+int l6msg_get_float_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        float **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_FLOAT_ARRAY, (void**)data, sizeof(float), 0, -1, count);
+}
+
+int l6msg_get_double_array_ptr_at_index(l6msg *lmsg, int index, 
+                                        double **data, int *count)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_DOUBLE_ARRAY, (void**)data, sizeof(double), 0, -1, count);
+}
+
+int l6msg_get_layer6_msg_ptr_at_index(l6msg *lmsg, int index, l6msg *data)
+{
+    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int fcount = 0;
+    return get_field_data_in_msg_at_index(msg, index, 
+                L6_DATATYPE_L6MSG, (void**)&data, sizeof(char), 0, -1, &fcount);
+}
+
+int l6msg_add_byte(l6msg *lmsg, char data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	return add_field_data_in_msg(msg, L6_DATATYPE_BYTE,
+                 &data, sizeof(char), 1, msg->deep_copy);
+}
+
+int l6msg_set_byte(l6msg *lmsg, int fid, char data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	return set_field_data_in_msg_with_id(msg, fid, L6_DATATYPE_BYTE,
+                 &data, sizeof(char), 1, msg->deep_copy);
+}
+
+int l6msg_get_byte(l6msg *lmsg, int fid, char *data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	int fcount;
+	return get_field_data_in_msg_by_id(msg, fid, L6_DATATYPE_BYTE,
+                 (void**)&data, sizeof(char), 0, 1, &fcount);
+}
+
+int l6msg_set_byte_named(l6msg *lmsg, _const_char *key, char data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	return set_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTE,
+                 &data, sizeof(char), 1, msg->deep_copy);
+}
+
+int l6msg_get_byte_named(l6msg *lmsg, _const_char *key, char *data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	int fcount;
+	return get_field_data_in_msg_named(msg, key, L6_DATATYPE_BYTE,
+                 (void**)&data, sizeof(char), 0, 1, &fcount);
+}
+
+int l6msg_set_byte_at_index(l6msg *lmsg, int index, char data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	return set_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTE,
+                 &data, sizeof(char), 1, msg->deep_copy);
+}
+
+int l6msg_get_byte_at_index(l6msg *lmsg, int index, char *data)
+{
+	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+	int fcount;
+	return get_field_data_in_msg_at_index(msg, index, L6_DATATYPE_BYTE,
+                 (void**)&data, sizeof(char), 0, 1, &fcount);
+}

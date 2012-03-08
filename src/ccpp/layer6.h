@@ -30,6 +30,7 @@
 #define L6_DATATYPE_UINT8_ARRAY          17
 #define L6_DATATYPE_UNSIGNED_BYTES       17
 #define L6_DATATYPE_BYTES                18
+#define L6_DATATYPE_BYTE_ARRAY           18
 #define L6_DATATYPE_INT8_ARRAY           18
 #define L6_DATATYPE_UINT16_ARRAY         19
 #define L6_DATATYPE_UNSIGNED_SHORT_ARRAY 19
@@ -89,6 +90,7 @@
 
 #define L6_MSG_FIELD_NAME_MAX_LEN       128
 
+#define L6_MSG_FIELD_ID_NONE             -1
 
 #define L6_CHECK_MSG_LOCKS               1
 /*
@@ -113,6 +115,7 @@ typedef unsigned __int8     uint8_t;
 #endif
 
 typedef void* l6msg;
+typedef void* l6msg_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -142,6 +145,12 @@ const char* l6msg_get_debug_info(l6msg *msg);
 
 const char* l6_get_error_str_for_code(int e);
 
+//convenience allocate+initialize method
+l6msg l6msg_alloc();
+
+//VARARGS get/set convenience methods
+int l6msg_setf                      (l6msg *msg, const char *fmt, ...);
+int l6msg_getf                      (l6msg *msg, const char *fmt, ...);
 
 //Not yet (and may never be) supported
 void l6msg_set_code                 (l6msg *msg, int code);
@@ -155,6 +164,7 @@ void __cdecl l6msg_setChar(l6msg *msg, char);
 */
 //Add fields
 //Scalars
+int l6msg_add_byte                      (l6msg *msg, char            data);
 int l6msg_add_int16                     (l6msg *msg, int16_t         data);
 int l6msg_add_short                     (l6msg *msg, short           data);
 int l6msg_add_int32                     (l6msg *msg, int32_t         data);
@@ -191,6 +201,7 @@ int l6msg_add_double_array_ptr          (l6msg *msg, double         *data, int c
 int l6msg_add_layer6_msg_ptr            (l6msg *msg, l6msg           *submsg);
 
 //Scalars
+int l6msg_set_byte                      (l6msg *msg, int fid, char            data);
 int l6msg_set_int16                     (l6msg *msg, int fid, int16_t         data);
 int l6msg_set_short                     (l6msg *msg, int fid, short           data);
 int l6msg_set_int32                     (l6msg *msg, int fid, int32_t         data);
@@ -228,6 +239,7 @@ int l6msg_set_double_array_ptr          (l6msg *msg, int fid,    double         
 int l6msg_set_layer6_msg_ptr            (l6msg *msg, int fid,   l6msg           *submsg);
 
 //Scalars By Name
+int l6msg_set_byte_named                (l6msg *msg, const char *key, char            data);
 int l6msg_set_int16_named               (l6msg *msg, const char *key, int16_t         data);
 int l6msg_set_short_named               (l6msg *msg, const char *key, short           data);
 int l6msg_set_int32_named               (l6msg *msg, const char *key, int32_t         data);
@@ -265,46 +277,48 @@ int l6msg_set_layer6_msg_ptr_named      (l6msg *msg, const char *key,  l6msg    
 
 //By index
 //Scalars
-int l6msg_set_int16_at_index            (l6msg *msg, int fid, int16_t         data);
-int l6msg_set_short_at_index            (l6msg *msg, int fid, short           data);
-int l6msg_set_int32_at_index            (l6msg *msg, int fid, int32_t         data);
-int l6msg_set_int_at_index              (l6msg *msg, int fid, int             data);
-int l6msg_set_int64_at_index            (l6msg *msg, int fid, int64_t         data);
-int l6msg_set_long_at_index             (l6msg *msg, int fid, long long int   data);
-int l6msg_set_float_at_index            (l6msg *msg, int fid, float           data);
-int l6msg_set_double_at_index           (l6msg *msg, int fid, double          data);
+int l6msg_set_byte_at_index             (l6msg *msg, int index, char            data);
+int l6msg_set_int16_at_index            (l6msg *msg, int index, int16_t         data);
+int l6msg_set_short_at_index            (l6msg *msg, int index, short           data);
+int l6msg_set_int32_at_index            (l6msg *msg, int index, int32_t         data);
+int l6msg_set_int_at_index              (l6msg *msg, int index, int             data);
+int l6msg_set_int64_at_index            (l6msg *msg, int index, int64_t         data);
+int l6msg_set_long_at_index             (l6msg *msg, int index, long long int   data);
+int l6msg_set_float_at_index            (l6msg *msg, int index, float           data);
+int l6msg_set_double_at_index           (l6msg *msg, int index, double          data);
 
 //Arrays
-int l6msg_set_string_at_index           (l6msg *msg, int fid,   const char      *data);
-int l6msg_set_byte_array_at_index       (l6msg *msg, int fid,   char            *data, int size);
-int l6msg_set_int16_array_at_index      (l6msg *msg, int fid,   int16_t         *data, int count);
-int l6msg_set_short_array_at_index      (l6msg *msg, int fid,   short           *data, int count);
-int l6msg_set_int32_array_at_index      (l6msg *msg, int fid,   int32_t         *data, int count);
-int l6msg_set_int_array_at_index        (l6msg *msg, int fid,   int             *data, int count);
-int l6msg_set_int64_array_at_index      (l6msg *msg, int fid,   int64_t         *data, int count);
-int l6msg_set_long_array_at_index       (l6msg *msg, int fid,   long long int   *data, int count);
-int l6msg_set_float_array_at_index      (l6msg *msg, int fid,   float           *data, int count);
-int l6msg_set_double_array_at_index     (l6msg *msg, int fid,   double          *data, int count);
-int l6msg_set_layer6_msg_at_index       (l6msg *msg, int fid,   l6msg           *submsg);
+int l6msg_set_string_at_index           (l6msg *msg, int index, const char      *data);
+int l6msg_set_byte_array_at_index       (l6msg *msg, int index, char            *data, int size);
+int l6msg_set_int16_array_at_index      (l6msg *msg, int index, int16_t         *data, int count);
+int l6msg_set_short_array_at_index      (l6msg *msg, int index, short           *data, int count);
+int l6msg_set_int32_array_at_index      (l6msg *msg, int index, int32_t         *data, int count);
+int l6msg_set_int_array_at_index        (l6msg *msg, int index, int             *data, int count);
+int l6msg_set_int64_array_at_index      (l6msg *msg, int index, int64_t         *data, int count);
+int l6msg_set_long_array_at_index       (l6msg *msg, int index, long long int   *data, int count);
+int l6msg_set_float_array_at_index      (l6msg *msg, int index, float           *data, int count);
+int l6msg_set_double_array_at_index     (l6msg *msg, int index, double          *data, int count);
+int l6msg_set_layer6_msg_at_index       (l6msg *msg, int index, l6msg           *submsg);
 //int l6msg_setStringArray(l6msg *msg, char**  data, int);
 
 //Array Pointers
-int l6msg_set_string_ptr_at_index       (l6msg *msg, int fid,    const char     *data);
-int l6msg_set_byte_array_ptr_at_index   (l6msg *msg, int fid,    char           *data, int size);
-int l6msg_set_int16_array_ptr_at_index  (l6msg *msg, int fid,    int16_t        *data, int count);
-int l6msg_set_short_array_ptr_at_index  (l6msg *msg, int fid,    short          *data, int count);
-int l6msg_set_int32_array_ptr_at_index  (l6msg *msg, int fid,    int32_t        *data, int count);
-int l6msg_set_int_array_ptr_at_index    (l6msg *msg, int fid,    int            *data, int count);
-int l6msg_set_int64_array_ptr_at_index  (l6msg *msg, int fid,    int64_t        *data, int count);
-int l6msg_set_long_array_ptr_at_index   (l6msg *msg, int fid,    long long int  *data, int count);
-int l6msg_set_float_array_ptr_at_index  (l6msg *msg, int fid,    float          *data, int count);
-int l6msg_set_double_array_ptr_at_index (l6msg *msg, int fid,    double         *data, int count);
-int l6msg_set_layer6_msg_ptr_at_index   (l6msg *msg, int fid,   l6msg           *submsg);
+int l6msg_set_string_ptr_at_index       (l6msg *msg, int index, const char     *data);
+int l6msg_set_byte_array_ptr_at_index   (l6msg *msg, int index, char           *data, int size);
+int l6msg_set_int16_array_ptr_at_index  (l6msg *msg, int index, int16_t        *data, int count);
+int l6msg_set_short_array_ptr_at_index  (l6msg *msg, int index, short          *data, int count);
+int l6msg_set_int32_array_ptr_at_index  (l6msg *msg, int index, int32_t        *data, int count);
+int l6msg_set_int_array_ptr_at_index    (l6msg *msg, int index, int            *data, int count);
+int l6msg_set_int64_array_ptr_at_index  (l6msg *msg, int index, int64_t        *data, int count);
+int l6msg_set_long_array_ptr_at_index   (l6msg *msg, int index, long long int  *data, int count);
+int l6msg_set_float_array_ptr_at_index  (l6msg *msg, int index, float          *data, int count);
+int l6msg_set_double_array_ptr_at_index (l6msg *msg, int index, double         *data, int count);
+int l6msg_set_layer6_msg_ptr_at_index   (l6msg *msg, int index, l6msg           *submsg);
 
 
 //Get
 //int __cdecl l6msg_getChar(l6msg *msg, int, char*);
 //Get Scalars
+int l6msg_get_byte                      (l6msg *msg, int fid,     char           *data);
 int l6msg_get_int16                     (l6msg *msg, int fid,     int16_t        *data);
 int l6msg_get_short                     (l6msg *msg, int fid,     short          *data);
 int l6msg_get_int32                     (l6msg *msg, int fid,     int32_t        *data);
@@ -316,6 +330,7 @@ int l6msg_get_double                    (l6msg *msg, int fid,     double        
 int l6msg_get_string                    (l6msg *msg, int fid,     char           *data, int len);
 
 //Get Scalars by index
+int l6msg_get_byte_at_index             (l6msg *msg, int index,   char           *data);
 int l6msg_get_int16_at_index            (l6msg *msg, int index,   int16_t        *data);
 int l6msg_get_short_at_index            (l6msg *msg, int index,   short          *data);
 int l6msg_get_int32_at_index            (l6msg *msg, int index,   int32_t        *data);
@@ -327,6 +342,7 @@ int l6msg_get_double_at_index           (l6msg *msg, int index,   double        
 int l6msg_get_string_at_index           (l6msg *msg, int index,   char           *data, int len);
 
 //Get Scalars by name
+int l6msg_get_byte_named                (l6msg *msg, const char *key,   char          *data);
 int l6msg_get_int16_named               (l6msg *msg, const char *key,   int16_t       *data);
 int l6msg_get_short_named               (l6msg *msg, const char *key,   short         *data);
 int l6msg_get_int32_named               (l6msg *msg, const char *key,   int32_t       *data);
@@ -413,12 +429,23 @@ int l6msg_get_double_array_ptr_named    (l6msg *msg, const char *key,   double  
 int l6msg_get_layer6_msg_ptr_named      (l6msg *msg, const char *key,   l6msg         *submsg);
 
 int l6msg_size                          (l6msg *msg);
-//alias
+
+int l6msg_min_buffer_size               (l6msg *msg);
+//alias
 #define l6msg_get_size                  l6msg_size
 
 int l6msg_serialize                     (l6msg *msg, char *data,    int length, int *left);
+int l6msg_serialize_header              (l6msg *msg, char *data,    int length, int *left);
+int l6msg_serialize_metadata            (l6msg *msg, char *data,    int length, int *left);
+int l6msg_serialize_data                (l6msg *msg, char *data,    int length, int *left);
+
 int l6msg_deserialize                   (l6msg *msg, char *buffer,  int length, int *left);
+int l6msg_deserialize_copy              (l6msg *msg, char *buffer,  int length, int *left);
 int l6msg_deserialize_in_place          (l6msg *msg, char *buffer,  int length, int *left);
+
+int l6msg_deserialize_header            (l6msg *msg, char *data,    int length, int *left);
+int l6msg_deserialize_metadata          (l6msg *msg, char *data,    int length, int *left);
+int l6msg_deserialize_data              (l6msg *msg, char *data,    int length, int *left);
 
 //convenience methods to directly serialize to / deserialize from a file descriptor / socket
 //int l6msg_serialize_to_fd             (l6msg *msg, int fd, int *left);
@@ -486,6 +513,7 @@ void l6_override_vector_methods    (int   (*ovrr_mvec_init)         (void **q, i
 // ******************* aliases (using #defines) for Camel-case API
 #define L6Msg                          l6msg
 #define L6MsgInit                      l6msg_init
+#define L6MsgAlloc                     l6msg_alloc
 #define L6MsgReset                     l6msg_reset
 #define L6MsgFree                      l6msg_free
 
@@ -660,6 +688,16 @@ void l6_override_vector_methods    (int   (*ovrr_mvec_init)         (void **q, i
 //#define L6MsgSize                      l6msg_getSizeInBytes
 #define L6MsgSize                      l6msg_get_size_bytes
 #define L6MsgDeserializeInPlace        l6msg_deserialize_in_place
+
+#define L6MsgSerialize                 l6msg_serialize
+#define L6MsgSerializeHeader           l6msg_serialize_header
+#define L6MsgSerializeMetadata         l6msg_serialize_metadata
+#define L6MsgSerializeData             l6msg_serialize_data
+
+#define L6MsgDeserialize               l6msg_deserialize
+#define L6MsgDeserializeHeader         l6msg_deserialize_header
+#define L6MsgDeserializeMetadata       l6msg_deserialize_metadata
+#define L6MsgDeserializeData           l6msg_deserialize_data
 
 //field ops
 #define L6MsgGetNumFields              l6msg_get_num_fields
