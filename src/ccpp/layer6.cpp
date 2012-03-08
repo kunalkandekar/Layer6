@@ -89,6 +89,10 @@ int Layer6Msg::getSize() {
 	return l6msg_get_size(&msg);
 }
 
+int Layer6Msg::minBufferSize() {
+	return l6msg_min_buffer_size(&msg);
+}
+
 int Layer6Msg::serialize(char* buffer, int length, int *left) {
 	int ret = l6msg_serialize(&msg, buffer, length, left);
 	if(ret < 0) {
@@ -107,6 +111,54 @@ int Layer6Msg::deserialize(char *buffer, int length, int *left) {
 
 int Layer6Msg::deserializeInPlace(char *buffer, int length, int *left) {
 	int ret = l6msg_deserialize_in_place(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::serializeHeader(char *buffer, int length, int *left) {
+	int ret = l6msg_serialize_header(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::serializeMetadata(char *buffer, int length, int *left) {
+	int ret = l6msg_serialize_metadata(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::serializeData(char *buffer, int length, int *left) {
+	int ret = l6msg_serialize_data(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::deserializeHeader(char *buffer, int length, int *left) {
+	int ret = l6msg_deserialize_header(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::deserializeMetadata(char *buffer, int length, int *left) {
+	int ret = l6msg_deserialize_metadata(&msg, buffer, length, left);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+	return ret;
+}
+
+int Layer6Msg::deserializeData(char *buffer, int length, int *left) {
+	int ret = l6msg_deserialize_data(&msg, buffer, length, left);
 	if(ret < 0) {
 		throwExceptionIfEnabled();
 	}
@@ -418,6 +470,194 @@ void Layer6Msg::setDoubleArrayPtr(const char *key, double *data, int count) {
 		throwExceptionIfEnabled();
 	}
 }
+
+
+//Set by index
+//Scalars By Index
+void Layer6Msg::setInt16At(int index, int16_t data) {
+	int ret = l6msg_set_int16_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setShortAt(int index, short data) {
+	int ret = l6msg_set_short_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt32At(int index, int32_t data) {
+	int ret = l6msg_set_int32_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setIntAt(int index, int data) {
+	int ret = l6msg_set_int_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt64At(int index, int64_t data) {
+	int ret = l6msg_set_int64_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+    
+void Layer6Msg::setLongAt(int index, long long int data) {
+	int ret = l6msg_set_long_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setFloatAt(int index, float data) {
+	int ret = l6msg_set_float_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setDoubleAt(int index, double data) {
+	int ret = l6msg_set_double_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+//Arrays By index
+void Layer6Msg::setStringAt(int index, const char *data) {
+	int ret = l6msg_set_string_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setByteArrayAt(int index, char *data, int size) {
+	int ret = l6msg_set_byte_array_at_index(&msg, index, data, size);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt16ArrayAt(int index, int16_t *data, int count) {
+	int ret = l6msg_set_int16_array_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt32ArrayAt(int index, int32_t *data, int count) {
+	int ret = l6msg_set_int32_array_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt64ArrayAt(int index, int64_t *data, int count) {
+	int ret = l6msg_set_int64_array_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setFloatArrayAt(int index, float *data, int count) {
+	int ret = l6msg_set_float_array_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setDoubleArrayAt(int index, double *data, int count) {
+	int ret = l6msg_set_double_array_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setLayer6MsgAt(int index, Layer6Msg *subMsg) {
+	int ret = l6msg_set_layer6_msg_at_index(&msg, index, subMsg->getl6msg());
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setLayer6MsgAt(int index, Layer6Msg &subMsg) {
+	int ret = l6msg_set_layer6_msg_at_index(&msg, index, subMsg.getl6msg());
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+//Array Pointers By index
+void Layer6Msg::setStringPtrAt(int index, const char *data) {
+	int ret = l6msg_set_string_ptr_at_index(&msg, index, data);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setByteArrayPtrAt(int index, char *data, int size) {
+	int ret = l6msg_set_byte_array_ptr_at_index(&msg, index, data, size);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt16ArrayPtrAt(int index, int16_t *data, int count) {
+	int ret = l6msg_set_int16_array_ptr_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt32ArrayPtrAt(int index, int32_t *data, int count) {
+	int ret = l6msg_set_int32_array_ptr_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setInt64ArrayPtrAt(int index, int64_t *data, int count) {
+	int ret = l6msg_set_int64_array_ptr_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setFloatArrayPtrAt(int index, float *data, int count) {
+	int ret = l6msg_set_float_array_ptr_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setDoubleArrayPtrAt(int index, double *data, int count) {
+	int ret = l6msg_set_double_array_ptr_at_index(&msg, index, data, count);
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setLayer6MsgPtrAt(int index, Layer6Msg *subMsg) {
+	int ret = l6msg_set_layer6_msg_ptr_at_index(&msg, index, subMsg->getl6msg());
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
+void Layer6Msg::setLayer6MsgPtrAt(int index, Layer6Msg &subMsg) {
+	int ret = l6msg_set_layer6_msg_ptr_at_index(&msg, index, subMsg.getl6msg());
+	if(ret < 0) {
+		throwExceptionIfEnabled();
+	}
+}
+
 
 //Get
 //Get Scalars

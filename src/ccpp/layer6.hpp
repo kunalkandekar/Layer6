@@ -71,10 +71,20 @@ public:
 //serializing
     int size();
     int getSize();
+    int minBufferSize();
 
-    int serialize          (char *buffer, int length, int *left);
-    int deserialize        (char *buffer, int length, int *left);
-    int deserializeInPlace (char *buffer, int length, int *left);
+    int serialize           (char *buffer, int length, int *left);
+    int deserialize         (char *buffer, int length, int *left);
+    int deserializeInPlace  (char *buffer, int length, int *left);
+
+
+    int serializeHeader     (char *buffer, int length, int *left);
+    int serializeMetadata   (char *buffer, int length, int *left);
+    int serializeData       (char *buffer, int length, int *left);
+
+    int deserializeHeader   (char *buffer, int length, int *left);
+    int deserializeMetadata (char *buffer, int length, int *left);
+    int deserializeData     (char *buffer, int length, int *left);
 
 //Setters
 //Add Scalars
@@ -148,6 +158,45 @@ public:
     void setDoubleArray     (int fid,    double         *data, int count);
     void setLayer6Msg       (int fid,    Layer6Msg      *subMsg);
     void setLayer6Msg       (int fid,    Layer6Msg      &subMsg);
+
+//Scalars By Index
+    void setInt16At         (int index,  int16_t    data);
+    void setShortAt         (int index,  short      data);
+    void setInt32At         (int index,  int32_t    data);
+    void setIntAt           (int index,  int        data);
+    void setInt64At         (int index,  int64_t    data);    
+    void setLongAt          (int index,  long long int data);
+    void setFloatAt         (int index,  float      data);
+    void setDoubleAt        (int index,  double     data);
+
+//Arrays By index
+    void setStringAt        (int index,  const char     *data);
+    void setByteArrayAt     (int index,  char           *data, int size);
+    void setInt16ArrayAt    (int index,  int16_t        *data, int count);
+    void setShortArrayAt    (int index,  short          *data, int count)    { setInt16Array (index, (int16_t *)data, count); }
+    void setInt32ArrayAt    (int index,  int32_t        *data, int count);
+    void setIntArrayAt      (int index,  int            *data, int count)    { setInt32Array (index, (int32_t *)data, count); }
+    void setInt64ArrayAt    (int index,  int64_t        *data, int count);
+    void setLongArrayAt     (int index,  long long int  *data, int count)    { setInt64Array (index, (int64_t *)data, count); }
+    void setFloatArrayAt    (int index,  float          *data, int count);
+    void setDoubleArrayAt   (int index,  double         *data, int count);
+    void setLayer6MsgAt     (int index,  Layer6Msg      *subMsg);
+    void setLayer6MsgAt     (int index,  Layer6Msg      &subMsg);
+
+//Array Pointers By index
+    void setStringPtrAt     (int index,  const char     *data);
+    void setByteArrayPtrAt  (int index,  char           *data, int size);
+    void setInt16ArrayPtrAt (int index,  int16_t        *data, int count);
+    void setShortArrayPtrAt (int index,  short          *data, int count)    { setInt16ArrayPtr (index, (int16_t *)data, count); }
+    void setInt32ArrayPtrAt (int index,  int32_t        *data, int count);
+    void setIntArrayPtrAt   (int index,  int            *data, int count)    { setInt32ArrayPtr (index, (int32_t *)data, count); }
+    void setInt64ArrayPtrAt (int index,  int64_t        *data, int count);
+    void setLongArrayPtrAt  (int index,  long long int  *data, int count)    { setInt64ArrayPtr (index, (int64_t *)data, count); }
+    void setFloatArrayPtrAt (int index,  float          *data, int count);
+    void setDoubleArrayPtrAt(int index,  double         *data, int count);
+    void setLayer6MsgPtrAt  (int index,  Layer6Msg      *subMsg);
+    void setLayer6MsgPtrAt  (int index,  Layer6Msg      &subMsg);
+
 
 //Array Pointers
     void setStringPtr       (int fid,    const char     *data);
