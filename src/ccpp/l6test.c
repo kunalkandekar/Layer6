@@ -108,7 +108,6 @@ int connect_sock(int sd, char* remote, int port)
     else 
     {
         hp = gethostbyname(remote);
-        printf("\ngethostbyname %s = %p\n", remote, hp);
         //log("2: connecting to  %s:%d -- %x",remote, port, hp);
         if(!hp)
             return -1;
@@ -446,8 +445,7 @@ int deserialize(char *buffer, int len, char *opstr, int oplen)
     int left = 0;
     //deserialize
     printf("\nServer: deserializing.... ");
-    l6msg msg;
-    l6msg_init(&msg);
+    l6msg msg = l6msg_alloc();
 
     int ret = l6msg_deserialize(&msg, buffer, len, &left);
     if(ret < 0) 

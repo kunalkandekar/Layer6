@@ -607,7 +607,7 @@ int deserialize(const char *who, char *buffer, int len, char *opstr)
 	int ret = msg.deserialize(buffer, len, &left);
 	if(ret < 0) 
 	{
-		std::cout<<"\n"<<who<<": "<<msg.getErrorStr()<<std::flush;
+		std::cout<<"\n"<<who<<": "<<msg.getDebugInfo()<<std::flush;
 		return -1;
 	}
 	std::cout<<"\n"<<who<<": deserialized "<<len<<" bytes left="<<left<<", num fields="<<msg.getNumFields()<<std::flush;
@@ -761,6 +761,9 @@ int runClient(const char *host, int port, int altfd)
 		int tempintarr[] = {1,2,3,5,7,11,13};
 		subMsg->setIntArrayPtr(3, tempintarr, sizeof(tempintarr)/sizeof(int));
 		
+		//overwrite float
+        msg->setFloatAt(3,(float)49.312);
+	
 		if(addSubSubMsg) {
             Layer6Msg subSubMsg;
             short * sarr= new short[4]; sarr[0] = 1; sarr[1] = 3; sarr[2] = 4; sarr[3] = 5;
@@ -834,7 +837,7 @@ int runClient(const char *host, int port, int altfd)
 		len = 0;
 		do
 		{
-			len = msg->serialize(buffer+len, 64, &left);
+			ret = msg->serialize(buffer+len, 256, &left);
 			if(len < 0) 
 			{
 				std::cout<<msg->getErrorStr()<<std::flush;
@@ -842,7 +845,8 @@ int runClient(const char *host, int port, int altfd)
 			}
 			else
 			{
-				std::cout<<" "<<left<<", "<<std::flush;
+                len += ret;
+				std::cout<<" done="<<len<<" left="<<left<<", "<<std::flush;
 			}
 		}
 		while(left);
@@ -873,7 +877,7 @@ int runClient(const char *host, int port, int altfd)
     	delete msg;
     	if(subMsg)
     		delete subMsg;
-        std::cout<<"\nClient: exiting "<<std::flush;
+        std::cout<<"\nClient: wrote "<<ret<<", exiting "<<std::flush;
     	return ret;
 	}
 
