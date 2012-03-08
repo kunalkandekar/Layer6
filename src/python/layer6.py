@@ -357,7 +357,7 @@ class Layer6Msg:
         if(self.is_locked):
             self.error_code = Layer6.L6_ERR_MSG_LOCKED
             if(Layer6Msg._SET_DEBUG_INFO): 
-                self.debug = ("%d-%s") %(msg.error_code, self.get_error_str())
+                self.debug = ("%d-%s") % (self.error_code, self.get_error_str())
             raise Layer6Error(self.error_code)
 
         extra = ""
@@ -837,7 +837,7 @@ class Layer6Msg:
 
             if(self.total_length > length):
                 self.is_partial = 1
-                self.is_locked = 1
+                #self.is_locked  = 1
     
         if(self.is_partial):
             ret = 0
@@ -1326,8 +1326,8 @@ class Layer6Msg:
         #iterate thru fields and set
         for field in self.qfields:
             #self.debug_field(field)
-            field2 = msg2.__set_field_data_in_msg(field.name, field.fid, -1, field.ftype, field.data, field.length, field.count, msg2.deep_copy_default)
-            if(field == None):
+            retfield = msg2.__set_field_data_in_msg(field.name, field.fid, -1, field.ftype, field.data, field.length, field.count, msg2.deep_copy_default)
+            if(retfield == None):
                 #some error in copying
                 return None
         return msg2
