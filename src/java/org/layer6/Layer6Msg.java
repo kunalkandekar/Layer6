@@ -1319,430 +1319,529 @@ public class Layer6Msg {
     }
 
     //Scalars
-    public void addShort(short data) throws Layer6Exception {
+    public Layer6Msg addShort(short data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT, (double)data, 2);
+        return this;
     }
     
-    public void setShort(int id, short data) throws Layer6Exception {
+    public Layer6Msg setShort(int id, short data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT, (double)data, 2);
+        return this;
     }
-
-    public void setShort(String key, short data) throws Layer6Exception {
+    
+    public Layer6Msg setShort(String key, short data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT, (double)data, 2);
+        return this;
     }
-
-    public void setShortAt(int index, short data) throws Layer6Exception {
+    
+    public Layer6Msg setShortAt(int index, short data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT, (double)data, 2);
+        return this;
     }
-
-    public void addInt(int data) throws Layer6Exception {
+    
+    public Layer6Msg addInt(int data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32, (double)data, 4);
+        return this;
     }
-
-    public void setInt(int id, int data) throws Layer6Exception {
+    
+    public Layer6Msg setInt(int id, int data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32, (double)data, 4);
+        return this;
     }
-
-    public void setInt(String key, int data) throws Layer6Exception {
+    
+    public Layer6Msg setInt(String key, int data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32, (double)data, 4);
+        return this;
     }
-
-    public void setIntAt(int index, int data) throws Layer6Exception {
+    
+    public Layer6Msg setIntAt(int index, int data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_INT32, (double)data, 4);
+        return this;
     }
-
-    public void addLong(long data) throws Layer6Exception {
+    
+    public Layer6Msg addLong(long data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG, (double)data, 8);
+        return this;
     }
-
-    public void setLong(int id, long data) throws Layer6Exception {
+    
+    public Layer6Msg setLong(int id, long data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG, (double)data, 8);
+        return this;
     }
-
-    public void setLong(String key, long data) throws Layer6Exception {
+    
+    public Layer6Msg setLong(String key, long data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG, (double)data, 8);
+        return this;
     }
-
-    public void setLongAt(int index, long data) throws Layer6Exception {
+    
+    public Layer6Msg setLongAt(int index, long data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG, (double)data, 8);
+        return this;
     }
-
-    public void addFloat(float data) throws Layer6Exception {
+    
+    public Layer6Msg addFloat(float data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT, (double)data, 4);
+        return this;
     }
-
-    public void setFloat(int id, float data) throws Layer6Exception {
+    
+    public Layer6Msg setFloat(int id, float data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_FLOAT, (double)data, 4);
+        return this;
     }
-
-    public void setFloat(String key, float data) throws Layer6Exception {
+    
+    public Layer6Msg setFloat(String key, float data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT, (double)data, 4);
+        return this;
     }
-
-    public void setFloatAt(int index, float data) throws Layer6Exception {
+    
+    public Layer6Msg setFloatAt(int index, float data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT, (double)data, 4);
+        return this;
     }
-
-    public void addDouble(double data) throws Layer6Exception {
+    
+    public Layer6Msg addDouble(double data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE, data, 8);
+        return this;
     }
-
-    public void setDouble(int id, double data) throws Layer6Exception {
+    
+    public Layer6Msg setDouble(int id, double data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE, data, 8);
+        return this;
     }
-
-    public void setDouble(String key, double data) throws Layer6Exception {
+    
+    public Layer6Msg setDouble(String key, double data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE, data, 8);
+        return this;
     }
-
-    public void setDoubleAt(int index, double data) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleAt(int index, double data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE, data, 8);
+        return this;
     }
-
-    //Arrays
-    public void addString(String data) throws Layer6Exception {
+    
+    public Layer6Msg addString(String data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), deepCopy);
+        return this;
     }
-
-    public void setString(int id, String data) throws Layer6Exception {
+    
+    public Layer6Msg setString(int id, String data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), deepCopy);
+        return this;
     }
-
-    public void setString(String key, String data) throws Layer6Exception {
+    
+    public Layer6Msg setString(String key, String data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), deepCopy);
+        return this;
     }
-
-    public void setStringAt(int index, String data) throws Layer6Exception {
+    
+    public Layer6Msg setStringAt(int index, String data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), deepCopy);
+        return this;
     }
-
-    public void addByteArray(byte [] data) throws Layer6Exception {
+    
+    public Layer6Msg addByteArray(byte [] data) throws Layer6Exception {
         addByteArray(data, 0, data.length);
+        return this;
     }
-
-    public void setByteArray(int id, byte [] data) throws Layer6Exception {
+    
+    public Layer6Msg setByteArray(int id, byte [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setByteArray(id, data, 0, data.length);
+        return this;
     }
-
-    public void setByteArray(String key, byte [] data) throws Layer6Exception {
+    
+    public Layer6Msg setByteArray(String key, byte [] data) throws Layer6Exception {
         setByteArray(key, data, 0, data.length);
+        return this;
     }
-
-    public void setByteArrayAt(int index, byte [] data) throws Layer6Exception {
+    
+    public Layer6Msg setByteArrayAt(int index, byte [] data) throws Layer6Exception {
         setByteArrayAt(index, data, 0, data.length);
+        return this;
     }
-
-    public void addByteArray(byte [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg addByteArray(byte [] data, int offset, int length) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, deepCopy);
+        return this;
     }
-
-    public void setByteArray(int id, byte [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg setByteArray(int id, byte [] data, int offset, int length) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, deepCopy);
+        return this;
     }
-
-    public void setByteArray(String key, byte [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg setByteArray(String key, byte [] data, int offset, int length) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, deepCopy);
+        return this;
     }
-
-    public void setByteArrayAt(int index, byte [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg setByteArrayAt(int index, byte [] data, int offset, int length) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, deepCopy);
+        return this;
     }
-
-    public void addShortArray(short [] data) throws Layer6Exception {
+    
+    public Layer6Msg addShortArray(short [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setShortArray(int id, short [] data) throws Layer6Exception {
+    
+    public Layer6Msg setShortArray(int id, short [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
-    }
-
-    public void setShortArray(String key, short [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
-    }
-
-    public void setShortArrayAt(int index, short [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
-    }
-
-    public void addShortArray(short [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
+        return this;
     }
     
-    public void setShortArray(int id, short [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setShortArray(String key, short [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setShortArrayAt(int index, short [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addShortArray(short [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setShortArray(int id, short [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
-    }
-
-    public void setShortArray(String key, short [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
-    }
-
-    public void setShortArrayAt(int index, short [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
-    }
-
-    public void addShortArrayRef(short [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, false);
+        return this;
     }
     
-    public void setShortArrayRef(int id, short [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setShortArray(String key, short [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setShortArrayAt(int index, short [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addShortArrayRef(short [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, false);
+        return this;
+    }
+    
+    public Layer6Msg setShortArrayRef(int id, short [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, false);
+        return this;
     }
-
-    public void setShortArrayRef(String key, short [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setShortArrayRef(String key, short [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, false);
+        return this;
     }
-
-    public void setShortArrayRefAt(int index, short [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setShortArrayRefAt(int index, short [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, offset, len, false);
+        return this;
     }
-
-    public void addIntArray(int [] data) throws Layer6Exception {
+    
+    public Layer6Msg addIntArray(int [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setIntArray(int id, int [] data) throws Layer6Exception {
+    
+    public Layer6Msg setIntArray(int id, int [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setIntArray(String key, int [] data) throws Layer6Exception {
+    
+    public Layer6Msg setIntArray(String key, int [] data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setIntArrayAt(int index, int [] data) throws Layer6Exception {
+    
+    public Layer6Msg setIntArrayAt(int index, int [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void addIntArray(int [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg addIntArray(int [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
     }
-
-    public void setIntArray(int id, int [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setIntArray(int id, int [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void setIntArray(String key, int [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void setIntArrayAt(int index, int [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void addIntArrayRef(int [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, false);
+        return this;
     }
     
-    public void setIntArrayRef(int id, int [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setIntArray(String key, int [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setIntArrayAt(int index, int [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addIntArrayRef(int [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, false);
+        return this;
+    }
+    
+    public Layer6Msg setIntArrayRef(int id, int [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void setIntArrayRef(String key, int [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setIntArrayRef(String key, int [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void setIntArrayRefAt(int index, int [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setIntArrayRefAt(int index, int [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void addLongArray(long [] data) throws Layer6Exception {
+    
+    public Layer6Msg addLongArray(long [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setLongArray(int id, long [] data) throws Layer6Exception {
+    
+    public Layer6Msg setLongArray(int id, long [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void setLongArray(String key, long [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void setLongArrayAt(int index, long [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void addLongArray(long [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
     }
     
-    public void setLongArray(int id, long [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setLongArray(String key, long [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setLongArrayAt(int index, long [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addLongArray(long [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setLongArray(int id, long [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void setLongArray(String key, long [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void setLongArrayAt(int index, long [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void addLongArrayRef(long [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, false);
+        return this;
     }
     
-    public void setLongArrayRef(int id, long [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setLongArray(String key, long [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setLongArrayAt(int index, long [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addLongArrayRef(long [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, false);
+        return this;
+    }
+    
+    public Layer6Msg setLongArrayRef(int id, long [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, false);
+        return this;
     }
-
-    public void setLongArrayRef(String key, long [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setLongArrayRef(String key, long [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, false);
+        return this;
     }
-
-    public void setLongArrayRefAt(int index, long [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setLongArrayRefAt(int index, long [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, offset, len, false);
+        return this;
     }
-
-    public void addFloatArray(float [] data) throws Layer6Exception {
+    
+    public Layer6Msg addFloatArray(float [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setFloatArray(int id, float [] data) throws Layer6Exception {
+    
+    public Layer6Msg setFloatArray(int id, float [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void setFloatArray(String key, float [] data, int count) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, deepCopy);
-    }
-
-    public void setFloatArrayAt(int index, float [] data, int count) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, deepCopy);
-    }
-
-    public void addFloatArray(float [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -2, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
     }
     
-    public void setFloatArray(int id, float [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setFloatArray(String key, float [] data, int count) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setFloatArrayAt(int index, float [] data, int count) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addFloatArray(float [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -2, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setFloatArray(int id, float [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void setFloatArray(String key, float [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void setFloatArrayAt(int index, float [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
-    }
-
-    public void addFloatArrayRef(float [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, false);
+        return this;
     }
     
-    public void setFloatArrayRef(int id, float [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setFloatArray(String key, float [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setFloatArrayAt(int index, float [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addFloatArrayRef(float [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, false);
+        return this;
+    }
+    
+    public Layer6Msg setFloatArrayRef(int id, float [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void setFloatArrayRef(String key, float [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setFloatArrayRef(String key, float [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void setFloatArrayRefAt(int index, float [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setFloatArrayRefAt(int index, float [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, offset, len, false);
+        return this;
     }
-
-    public void addDoubleArray(double [] data) throws Layer6Exception {
+    
+    public Layer6Msg addDoubleArray(double [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
     }
-
-    public void setDoubleArray(int id, double [] data) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArray(int id, double [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void setDoubleArray(String key, double [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void setDoubleArrayAt(int index, double [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
-    }
-
-    public void addDoubleArray(double [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
     }
     
-    public void setDoubleArray(int id, double [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setDoubleArray(String key, double [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setDoubleArrayAt(int index, double [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addDoubleArray(double [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setDoubleArray(int id, double [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void setDoubleArray(String key, Double [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void setDoubleArrayAt(int index, Double [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
-    }
-
-    public void addDoubleArrayRef(Double [] data, int offset, int len) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, false);
+        return this;
     }
     
-    public void setDoubleArrayRef(int id, Double [] data, int offset, int len) throws Layer6Exception {
+    public Layer6Msg setDoubleArray(String key, Double [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg setDoubleArrayAt(int index, Double [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, deepCopy);
+        return this;
+    }
+    
+    public Layer6Msg addDoubleArrayRef(Double [] data, int offset, int len) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, false);
+        return this;
+    }
+    
+    public Layer6Msg setDoubleArrayRef(int id, Double [] data, int offset, int len) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, false);
+        return this;
     }
-
-    public void setDoubleArrayRef(String key, Double [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRef(String key, Double [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, false);
+        return this;
     }
-
-    public void setDoubleArrayRefAt(int index, Double [] data, int offset, int len) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRefAt(int index, Double [] data, int offset, int len) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, len, false);
+        return this;
     }
     
-    public void addLayer6Msg(Layer6Msg data) throws Layer6Exception {
+    public Layer6Msg addLayer6Msg(Layer6Msg data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), deepCopy);
-    }
-
-    public void addLayer6MsgRef(Layer6Msg data) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), false);
+        return this;
     }
     
-    public void setLayer6Msg(String key, Layer6Msg data) throws Layer6Exception {
+    public Layer6Msg addLayer6MsgRef(Layer6Msg data) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), false);
+        return this;
+    }
+    
+    public Layer6Msg setLayer6Msg(String key, Layer6Msg data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), deepCopy);
+        return this;
     }
-
-    public void setLayer6MsgRef(String key, Layer6Msg data) throws Layer6Exception {
+    
+    public Layer6Msg setLayer6MsgRef(String key, Layer6Msg data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), false);
+        return this;
     }
-        
-    public void setLayer6Msg(int id, Layer6Msg data) throws Layer6Exception {
+    
+    public Layer6Msg setLayer6Msg(int id, Layer6Msg data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), deepCopy);
+        return this;
     }
-
-    public void setLayer6MsgRef(int id, Layer6Msg data) throws Layer6Exception {
+    
+    public Layer6Msg setLayer6MsgRef(int id, Layer6Msg data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), false);
+        return this;
     }
-
-    public void setLayer6MsgAt(int index, Layer6Msg data) throws Layer6Exception {
+    
+    public Layer6Msg setLayer6MsgAt(int index, Layer6Msg data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), deepCopy);
+        return this;
     }
-
-    public void setLayer6MsgRefAt(int index, Layer6Msg data) throws Layer6Exception {
+    
+    public Layer6Msg setLayer6MsgRefAt(int index, Layer6Msg data) throws Layer6Exception {
         setFieldInMsg(null, -1, index, Layer6.L6_DATATYPE_L6MSG, data, 1, 0, data.size(), false);
+        return this;
     }
 
     public Layer6Msg getLayer6Msg(String key) throws Layer6Exception {
@@ -1771,121 +1870,148 @@ public class Layer6Msg {
 
 
     //Set Ref arrays
-    public void addStringRef(String data) throws Layer6Exception {
+    public Layer6Msg addStringRef(String data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), false);
-    }
-
-    public void setStringRef(int id, String data) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), false);
-    }
-
-    public void setStringRef(String key, String data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), false);
-    }
-
-    public void addByteArrayRef(byte [] data) throws Layer6Exception {
-        addByteArrayRef(data, 0, data.length);
-    }
-
-    public void setByteArrayRef(int id, byte [] data) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setByteArrayRef(id, data, 0, data.length);
-    }
-
-    public void setByteArrayRef(String key, byte [] data) throws Layer6Exception {
-        setByteArrayRef(key, data, 0, data.length);
-    }
-
-    public void addByteArrayRef(byte [] data, int offset, int length) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
-    }
-
-    public void setByteArrayRef(int id, byte [] data, int offset, int length) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
-    }
-
-    public void setByteArrayRef(String key, byte [] data, int offset, int length) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
-    }
-
-    public void addShortArrayRef(short [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
-    }
-
-    public void setShortArrayRef(int id, short [] data) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
-    }
-
-    public void setShortArrayRef(String key, short [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
-    }
-
-    public void addIntArrayRef(int [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
-    }
-
-    public void setIntArrayRef(int id, int [] data) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
-    }
-
-    public void setIntArrayRef(String key, int [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
-    }
-
-    public void addLongArrayRef(long [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
-    }
-
-    public void setLongArrayRef(int id, long [] data) throws Layer6Exception {
-        validateIdOrThrowEx(id);
-        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
-    }
-
-    public void setLongArrayRef(String key, long [] data) throws Layer6Exception {
-        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
+        return this;
     }
     
-    public void addFloatArrayRef(float [] data) throws Layer6Exception {
-        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, false);
+    public Layer6Msg setStringRef(int id, String data) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), false);
+        return this;
     }
-
-    public void setFloatArrayRef(int id, float [] data) throws Layer6Exception {
+    
+    public Layer6Msg setStringRef(String key, String data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_STRING, data, 1, 0, (data.length() +1), false);
+        return this;
+    }
+    
+    public Layer6Msg addByteArrayRef(byte [] data) throws Layer6Exception {
+        addByteArrayRef(data, 0, data.length);
+        return this;
+    }
+    
+    public Layer6Msg setByteArrayRef(int id, byte [] data) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setByteArrayRef(id, data, 0, data.length);
+        return this;
+    }
+    
+    public Layer6Msg setByteArrayRef(String key, byte [] data) throws Layer6Exception {
+        setByteArrayRef(key, data, 0, data.length);
+        return this;
+    }
+    
+    public Layer6Msg addByteArrayRef(byte [] data, int offset, int length) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
+        return this;
+    }
+    
+    public Layer6Msg setByteArrayRef(int id, byte [] data, int offset, int length) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
+        return this;
+    }
+    
+    public Layer6Msg setByteArrayRef(String key, byte [] data, int offset, int length) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_BYTES, data, 1, offset, length, false);
+        return this;
+    }
+    
+    public Layer6Msg addShortArrayRef(short [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setShortArrayRef(int id, short [] data) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setShortArrayRef(String key, short [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_SHORT_ARRAY, data, 2, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg addIntArrayRef(int [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setIntArrayRef(int id, int [] data) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setIntArrayRef(String key, int [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_INT32_ARRAY, data, 4, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg addLongArrayRef(long [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setLongArrayRef(int id, long [] data) throws Layer6Exception {
+        validateIdOrThrowEx(id);
+        setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setLongArrayRef(String key, long [] data) throws Layer6Exception {
+        setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_LONG_ARRAY, data, 8, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg addFloatArrayRef(float [] data) throws Layer6Exception {
+        setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, false);
+        return this;
+    }
+    
+    public Layer6Msg setFloatArrayRef(int id, float [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, false);
+        return this;
     }
-
-    public void setFloatArrayRef(String key, float [] data) throws Layer6Exception {
+    
+    public Layer6Msg setFloatArrayRef(String key, float [] data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_FLOAT_ARRAY, data, 4, 0, data.length, false);
+        return this;
     }
-
-    public void addDoubleArrayRef(double [] data) throws Layer6Exception {
+    
+    public Layer6Msg addDoubleArrayRef(double [] data) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, false);
+        return this;
     }
-
-    public void setDoubleArrayRef(int id, double [] data) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRef(int id, double [] data) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, false);
+        return this;
     }
-
-    public void setDoubleArrayRef(String key, double [] data) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRef(String key, double [] data) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, 0, data.length, false);
+        return this;
     }
-
-    public void addDoubleArrayRef(double [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg addDoubleArrayRef(double [] data, int offset, int length) throws Layer6Exception {
         setFieldInMsg(null, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, length, false);
+        return this;
     }
-
-    public void setDoubleArrayRef(int id, double [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRef(int id, double [] data, int offset, int length) throws Layer6Exception {
         validateIdOrThrowEx(id);
         setFieldInMsg(null, id, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, length, false);
+        return this;
     }
-
-    public void setDoubleArrayRef(String key, double [] data, int offset, int length) throws Layer6Exception {
+    
+    public Layer6Msg setDoubleArrayRef(String key, double [] data, int offset, int length) throws Layer6Exception {
         setFieldInMsg(key, -1, -1, Layer6.L6_DATATYPE_DOUBLE_ARRAY, data, 8, offset, length, false);
+        return this;
     }
 
     //Get Scalars

@@ -250,13 +250,13 @@ public class Layer6Test implements Runnable {
             Layer6Msg msg = new Layer6Msg();
             try {
                 msg.setShort(1, (short)43);
-                msg.setInt(2, -23);
-                msg.setLong("l",3847);
-                msg.setFloat("float",(float)39.31);
-                msg.addDouble(1278.409823);
-                msg.setDoubleArray("da",darr);
-                msg.setIntArrayRef(4,iarr);
-                msg.setStringRef(5,"Yeeehaaaah!");
+                msg.setInt(2, -23)
+                    .setLong("l",3847)
+                    .setFloat("float",(float)39.31)
+                    .addDouble(1278.409823)
+                    .setDoubleArray("da",darr)
+                    .setIntArrayRef(4,iarr)
+                    .setStringRef(5,"Yeeehaaaah!");
 
                 //overwrite float
                 msg.setFloatAt(3, (float)49.312);
@@ -275,9 +275,9 @@ public class Layer6Test implements Runnable {
                 
                 if(addSubSubMsg) {
                     Layer6Msg subSubMsg = new Layer6Msg();
-                    subSubMsg.setShortArray("short-array", new short[] {1,3,4,5});
-                    subSubMsg.setString("sub-sub-key1", "qwerty");
-                    subSubMsg.setString("yowzah", "Lorem ipsum dolor sit amet.");
+                    subSubMsg.setShortArray("short-array", new short[] {1,3,4,5})
+                             .setString("sub-sub-key1", "qwerty")
+                             .setString("yowzah", "Lorem ipsum dolor sit amet.");
                     subMsg.setLayer6Msg("subsub", subSubMsg);
                     
                     Layer6Msg subSubMsgTemp = new Layer6Msg();
