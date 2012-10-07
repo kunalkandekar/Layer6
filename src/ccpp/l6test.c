@@ -458,7 +458,7 @@ int deserialize(char *buffer, int len, char *opstr, int oplen)
     ret = dump(msg, opstr, oplen, "\t");
     printf("\nServer: msg dump [len=%d]=%s", ret, opstr); fflush(stdout);
 
-    l6msg_free(&msg);        
+    l6msg_free(&msg);
     printf("\nServer: freed recvd msg "); fflush(stdout);
 
     return ret;
@@ -600,6 +600,18 @@ int run_client(char *host, int port, int altfd) {
         l6msg_free(&msg);
         return -1;
     }
+    
+    /*
+    //Uncomment this block to test name/id collision handling
+    printf("name collision test, "); fflush(stdout);
+    ret = l6msg_set_int_named(&msg, "l", 9999);
+    if(ret < 0) 
+    {
+        printf("\nError in set int (%d in %s): %s", __LINE__, __FILE__, l6msg_get_debug_info(&msg));
+        l6msg_free(&msg);
+        return -1;
+    }
+    */
 
     printf("float, "); fflush(stdout);
     ret = l6msg_set_float_named(&msg, "float",(float)39.31);
@@ -913,6 +925,113 @@ int main(int argc, char* argv[])
         return -1;
     }
 #endif
+
+    //test setf/getf
+    if(argc < 2) 
+    {
+        char buffer[1024];
+        int serialized_len = 0;
+        char opstr[1024];
+        int ret = 0;
+
+        l6msg msg;
+        //set and serialize
+        {
+            int i = 10;
+            long int l = 1025;
+            char *s = "Hello world";
+            short shorts[] = {9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+            float f = 3.14;
+            double d = 0.987654321;
+    
+            msg = l6msg_alloc();
+            ret = l6msg_setf(&msg, "'i'=%d 23=%ld %s garbage 'shorts': %h[] discarded %f %lf", i, l, s, shorts, 10, f, d); 
+            if(ret < 0) goto errormsg;
+    
+            ret = l6msg_set_long_at_index(&msg, 1, 2345678);
+            if(ret < 0) goto errormsg;
+            
+            l6msg msg2 = l6msg_alloc();
+            double doubles[] = {0.1, 2.3, 4.5, 6.7, 8.9};
+            ret = l6msg_setf(&msg2, "%s 32:%F[]", "howdy", doubles , sizeof(doubles)/sizeof(double)); 
+            if(ret < 0)
+            {
+                l6msg_free(&msg2);
+                goto errormsg;
+            }
+            ret = l6msg_setf(&msg, "'submsg'=%m ", &msg2); 
+            if(ret < 0)
+            {
+                l6msg_free(&msg2);
+                goto errormsg;
+            }
+            
+            dump(msg, opstr, sizeof(opstr), "\t");
+            printf("msg[%d]:\n%s\n", l6msg_get_num_fields(&msg), opstr);
+    
+            ret = l6msg_serialize(&msg, buffer, sizeof(buffer), NULL);
+            if(ret < 0) goto errormsg;
+    
+            serialized_len = ret;
+            printf("\n\tTest2 serlz ret=%d\n", serialized_len);
+            l6msg_free(&msg2);
+            l6msg_free(&msg);
+        }
+        
+        //deserialize and get
+        {
+            msg = l6msg_alloc();
+            ret = l6msg_deserialize(&msg, buffer, serialized_len, NULL);
+            if(ret < 0) goto errormsg;
+            dump(msg, opstr, sizeof(opstr), "\t");
+            printf("msg[%d]:\n%s\n", l6msg_get_num_fields(&msg), opstr);
+            
+            int ri;
+            long rl;
+            char *rs;
+            int16_t *rshorts;
+            int rshortslen;
+            float rf;
+            double rd;
+            l6msg msg2;
+            ret = l6msg_getf(&msg, "'i'=%d %ld %s #($@!!& 'shorts': %h[] %f %F %m", 
+                                    &ri, &rl, &rs, &rshorts, &rshortslen, &rf, &rd, &msg2); 
+            if(ret < 0) goto errormsg;
+    
+            printf("i=%d l=%ld f=%f d=%.10f\n", ri, rl, rf, rd);
+            int itr = 0;
+            printf("\nshorts=%p[%d]: [", rshorts, rshortslen);
+            for(itr = 0; itr < rshortslen; itr++) 
+            {
+                printf("%d,", rshorts[itr]);
+            }
+            printf("\b]\n");
+            double *rdoubles;
+            int rdoubleslen;
+            ret = l6msg_getf(&msg2, "32 : %F[]", &rdoubles, &rdoubleslen); 
+            if(ret < 0)
+            {
+                printf("\nError: [%s]\nDebug: [%s]", l6msg_get_error_str(&msg2), l6msg_get_debug_info(&msg2));
+                goto errormsg;
+            }
+
+            printf("doubles=%p[%d]: [", rdoubles, rdoubleslen); 
+            for(itr = 0; itr < rdoubleslen; itr++) 
+            {
+                printf("%.1f,", rdoubles[itr]);
+            }
+            printf("\b]\n");
+            l6msg_free(&msg);
+        }
+        printf("\n");
+        return 0;
+
+    errormsg:
+        printf("\nError: [%s]\nDebug: [%s]", l6msg_get_error_str(&msg), l6msg_get_debug_info(&msg));
+        l6msg_free(&msg);
+        printf("\n");
+        return 0;
+    }
 
     is_server = 0;
     //printf("\n sizeof int=%d long int=%d long long int=%d", sizeof(int), sizeof(long int), sizeof(long long int));

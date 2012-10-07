@@ -148,10 +148,6 @@ const char* l6_get_error_str_for_code(int e);
 //convenience allocate+initialize method
 l6msg l6msg_alloc();
 
-//VARARGS get/set convenience methods
-int l6msg_setf                      (l6msg *msg, const char *fmt, ...);
-int l6msg_getf                      (l6msg *msg, const char *fmt, ...);
-
 //Not yet (and may never be) supported
 void l6msg_set_code                 (l6msg *msg, int code);
 int  l6msg_get_code                 (l6msg *msg);
@@ -488,6 +484,10 @@ int l6msg_dup                           (l6msg *lmsrc, l6msg *lmdst);
 int l6msg_deserialize_template          (l6msg *msg, int template_id);
 int l6msg_set_templated                 (l6msg *msg, int template_id);
 int l6msg_is_templated                  (l6msg *msg);
+
+//convenience variadic functions to get/set multiple fields in a single method call
+int l6msg_setf                          (l6msg *msg, char *fmt, ...);
+int l6msg_getf                          (l6msg *msg, char *fmt, ...);
 
 //hooks
 void l6_override_hashtable_methods (int (*ovrr_htbl_init)       (void *vpmap, int type, int cap), 

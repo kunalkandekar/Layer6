@@ -5,7 +5,8 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <stdio.h>
-
+#include <stdarg.h>
+#include <ctype.h>
 
 /**
  * See l6spec.txt for the specifications of the message protocol and format.
@@ -413,7 +414,6 @@ static l6_htbl_entry_t *__l6_htbl_entry_alloc(l6_htbl_t *ph, void *key, int keys
 
     entry->next = NULL;
     return entry;
-    
 }
 
 static void __l6_htbl_entry_free(l6_htbl_t *ph, l6_htbl_entry_t *entry) 
@@ -446,7 +446,7 @@ static int __l6_htbl_generic_put(l6_htbl_t *ph, void *key, int keysize, void* fi
 {
     //don't worry about replacing duplicate key entries, app code handles that
     uint32_t hash       = l6_htbl_hash(key, keysize, ph->cap, ph->salt);
-    unsigned int index  = (hash % ph->cap);
+    unsigned int index  = (hash % ph->cap); //use bitmasking instead?
     l6_htbl_entry_t *entry   = __l6_htbl_entry_alloc(ph, key, keysize);
     l6_htbl_entry_t *current = ph->items[index];
     entry->hash         = hash;
@@ -466,7 +466,7 @@ static int __l6_htbl_generic_get(l6_htbl_t *ph, void *key, int keysize, l6_htbl_
     while(entry)
     {
         if((keysize == 0) ? (*(int*)key == entry->key.i) :
-            ((entry->hash == hash) && (keysize == entry->keysize) 
+            ((entry->hash == hash) && (keysize == entry->keysize)
                 && ((key == entry->key.p) || !memcmp(key, entry->key.p, keysize))))
         {
             *ret = entry;
@@ -487,7 +487,7 @@ static int __l6_htbl_generic_remove(l6_htbl_t *ph, void *key, int keysize, l6_ht
     while(entry)
     {
         if((keysize == 0) ? (*(int*)key == entry->key.i) :
-            ((entry->hash == hash) && (keysize == entry->keysize) 
+            ((entry->hash == hash) && (keysize == entry->keysize)
                 && ((key == entry->key.p) || !memcmp(key, entry->key.p, keysize))))
         {
             *ret = entry;
@@ -719,14 +719,18 @@ typedef struct _l6msg_struct
     int          has_metadata;
 
     /* serializing / deserializing modes */
-    int          deep_copy;
     int          auto_byte_mode;
     int          deserialize_lazily;
     //int        hasFieldnames;
 
     /* metadata */
-    unsigned char code;
     const char   *subject;        //un-supported
+    
+    unsigned int idgen;
+
+    //group most commonly accessed fields together for cache-friendliness?
+    /* serializing / deserializing state */
+    unsigned char code;
     unsigned int total_length;
     unsigned int metadata_length;
     int          data_length;
@@ -734,11 +738,12 @@ typedef struct _l6msg_struct
     char         *debug;
     unsigned int min_buffer_size;
 
-    unsigned int idgen;
-
     /* serializing / deserializing modes */
     int           internally_allocated;
     int           do_byte_swap;
+
+    int          deep_copy;
+    
     int           is_locked;
     msg_state     state;
     int           chk_submsg_cyc;
@@ -749,6 +754,17 @@ typedef struct _l6msg_struct
     int           itr;
     unsigned int  nfields;
     int           is_partial;
+
+    /* data */
+    void          *qfields;
+    
+    /* sub msgs */
+    /* data */
+    void          *qsub_msgs;    
+
+    void          *htbl_fld_name;
+    void          *htbl_fld_id;
+
     char          *tmpbuffer;
     int           tmpbuffermem;
     int           tmpbufferage;
@@ -762,16 +778,6 @@ typedef struct _l6msg_struct
     int           htbl_opt;
     int           poolsize;
     void          *qpool;
-
-    /* data */
-    void          *qfields;
-    
-    /* sub msgs */
-    /* data */
-    void          *qsub_msgs;    
-
-    void          *htbl_fld_name;
-    void          *htbl_fld_id;
 } l6msg_struct;
 
 
@@ -800,9 +806,18 @@ static void debug_field(l6msg_field *field)
         l6_datatype(field->type), field->elem_size, field->count, field->datalen, field->mdlength, field->total_size, *((int*)&(field->data))); fflush(stdout);
 }
 
-
-static int add_field_data_in_msg(l6msg_struct *msg, int type, void *data, int length, int count, int copy);
-
+//pre-declarations
+static int add_field_data_in_msg_ret(l6msg_struct *msg, 
+                l6msg_field **pfield, const char *name, int namelen, int32_t fid, 
+                int type, void *data, int length, int count, int copy);
+static int add_field_data_in_msg(l6msg_struct *msg, 
+                int type, void *data, int length, int count, int copy);
+static int add_field_data_in_msg_named(l6msg_struct *msg, 
+                const char *name, /* int namelen,*/
+                int type, void *data, int length, int count, int copy);
+static int add_field_data_in_msg_with_id(l6msg_struct *msg, 
+                int32_t fid, int type, void *data, int length, int count, int copy);
+                
 static int set_field_data_in_msg_ret(l6msg_struct *msg, l6msg_field **field, 
             _const_char *key, int namelen, int id, int index, int type, 
             void *data, int length, int count, int copy);
@@ -1171,7 +1186,7 @@ static int deserialize_l6msg(l6msg_field *field, char *buffer, int bswap, int co
 }
 
 //field handlers
-static l6msg_field_type_handler l6_field_type_handlers[30] = {
+const static l6msg_field_type_handler const l6_field_type_handlers[30] = {
     { 0, set_noop,      get_noop,    srlz_dsrlz_noop,   srlz_dsrlz_noop     },    // 0
     { 1, set_uint8,     get_uint8,   serialize_uint8,   deserialize_uint8   },
     { 1, set_int8,      get_int8,    serialize_int8,    deserialize_int8    },
@@ -1203,15 +1218,6 @@ static l6msg_field_type_handler l6_field_type_handlers[30] = {
     { 0, set_noop,  	get_noop,    srlz_dsrlz_noop,   srlz_dsrlz_noop     },
     { 0, set_noop,      get_noop,    srlz_dsrlz_noop,   srlz_dsrlz_noop     },
 };
-
-static int add_field_data_in_msg(l6msg_struct *msg, int type, 
-                                void *data, int length, int count, int copy)
-{
-    l6msg_field *field = NULL;
-    return set_field_data_in_msg_ret(msg, &field, NULL, 0, -1, -1, 
-                                type, data, length, count, copy);
-}
-
 
 #define DEBUG_BUF_SIZE 256
 static void sprintf_debug_info(l6msg_struct *msg, int ln, const char *fmt, ...) 
@@ -1291,6 +1297,74 @@ static int find_set_ret_field_data_in_msg(l6msg_struct *msg, const char *name,
                                     type, data, length, count, copy);
 }
 
+static int add_field_data_in_msg(l6msg_struct *msg, int type, 
+                                void *data, int length, int count, int copy)
+{
+    l6msg_field *field = NULL;
+    return add_field_data_in_msg_ret(msg, &field, NULL, 0, -1,
+                                    type, data, length, count, copy);
+}
+
+static int add_field_data_in_msg_named(l6msg_struct *msg, const char *name, /* int namelen,*/
+                int type, void *data, int length, int count, int copy)
+{
+    int namelen = 0;
+    l6msg_field *field = NULL;
+
+    if(name)
+    {
+        namelen = strlen(name);  //(name, (L6_MSG_FIELD_NAME_MAX_LEN + 2));
+
+        //cannot be longer than L6_MSG_FIELD_NAME_MAX_LEN
+        if(namelen > L6_MSG_FIELD_NAME_MAX_LEN)
+        {
+            msg->error_code = L6_ERR_FIELD_NAME_TOO_LONG;
+            if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "namelen=%d", namelen);
+            return -1;
+        }
+
+        if(get_field_named(msg, name, &field) >= 0)
+        {
+            msg->error_code = L6_ERR_FIELD_EXISTS;
+            if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "name=%s", name);
+            return -1;    //field not found
+        }
+        
+    }
+    else
+    {
+        msg->error_code = L6_ERR_FIELD_UNNAMED;
+        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "name=NULL");
+        return -1;
+    }
+    msg->error_code = 0;
+
+    return add_field_data_in_msg_ret(msg, &field, name, namelen, -1,
+                                    type, data, length, count, copy);
+}
+
+static int add_field_data_in_msg_with_id(l6msg_struct *msg, 
+            int32_t fid, int type, void *data, int length, int count, int copy)
+{
+    l6msg_field *field = NULL;
+
+    if(fid >= 0)
+    {
+        msg->error_code = L6_ERR_FIELD_ID_INVALID;
+        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "id=%d", fid);
+        return -1;
+    }
+    if(get_field_by_id(msg, fid, &field) >= 0)
+    {
+        msg->error_code = L6_ERR_FIELD_EXISTS;
+        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "id=%d", fid);
+        return -1;    //field not found
+    }
+    msg->error_code = 0;
+
+    return add_field_data_in_msg_ret(msg, &field, NULL, 0, fid,
+                                    type, data, length, count, copy);
+}
 
 static int set_field_data_in_msg_at_index(l6msg_struct *msg, int index, 
                 int type, void *data, int length, int count, int copy)
@@ -1300,6 +1374,12 @@ static int set_field_data_in_msg_at_index(l6msg_struct *msg, int index,
     if((index >= 0) && (index < l6_mvec_size(msg->qfields)))
     {
         field = (l6msg_field*)l6_mvec_get(msg->qfields, index);
+    }
+    else
+    {
+        msg->error_code = L6_ERR_FIELD_NOT_FOUND;
+        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "index=%d",index);
+        return -1;    //field not found
     }
 
     if(DISALLOW_TRANSPARENT_OVERWRITE && field)
@@ -1333,7 +1413,7 @@ static int set_field_data_in_msg_named(l6msg_struct *msg, const char *name, /* i
         }
 
         get_field_named(msg, name, &field);
-        if(DISALLOW_TRANSPARENT_OVERWRITE && field == NULL)
+        if(DISALLOW_TRANSPARENT_OVERWRITE && field)
         {
             msg->error_code = L6_ERR_FIELD_NOT_FOUND;
             if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "name=%s", name);
@@ -1343,7 +1423,6 @@ static int set_field_data_in_msg_named(l6msg_struct *msg, const char *name, /* i
     }
     else
         if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "name=NULL");
-
 
     return set_field_data_in_msg_ret(msg, &field, name, namelen, -1, -1, 
                                     type, data, length, count, copy);
@@ -1356,7 +1435,7 @@ static int set_field_data_in_msg_with_id(l6msg_struct *msg,
 
     if(fid >= 0) get_field_by_id(msg, fid, &field);
 
-    if(DISALLOW_TRANSPARENT_OVERWRITE && field == NULL)
+    if(DISALLOW_TRANSPARENT_OVERWRITE && field)
     {
         msg->error_code = L6_ERR_FIELD_NOT_FOUND;
         if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "id=%d", fid);
@@ -1402,13 +1481,14 @@ static int l6msg_free_field(l6msg_field *field)
 }
 
 //assumes ftype is not malicious, else could dereference invalid memory
+//TODO: Maybe replace this jump table with local switch case to allow inlining?
 static l6msg_field_type_handler *get_field_type_handler(l6msg_struct *msg, int ftype)
 {
     l6msg_field_type_handler *handler = NULL;
     if(ftype & L6_FLAG_FIELD_IS_EXTENSION)        //case L6_DATATYPE_CUSTOM:
         handler = msg->ext_handler;
     else
-        handler = l6_field_type_handlers + ftype;
+        handler = (l6msg_field_type_handler *)(l6_field_type_handlers + ftype);
 
     if((handler == NULL) || (handler->element_size_bytes < 1))
     {
@@ -1417,6 +1497,99 @@ static l6msg_field_type_handler *get_field_type_handler(l6msg_struct *msg, int f
         return NULL;
     }
     return handler;
+}
+
+static int add_field_data_in_msg_ret(l6msg_struct *msg, l6msg_field **pfield,
+                const char *name, int namelen, int32_t fid, 
+                int type, void *data, int length, int count, int copy){
+    int ret = 0;
+    if(l6_mvec_size(msg->qfields) >= L6_MAX_NUM_FIELDS)
+    {
+        msg->error_code = L6_ERR_MAX_NUM_FIELDS_EXCEEDED;
+        if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "nfields=%d", 
+                                                l6_mvec_size(msg->qfields));
+        return -1;
+    }
+
+    l6msg_field *field = NULL;
+    if(l6_mvec_size(msg->qpool))
+        field = (l6msg_field*)l6_mvec_pop(msg->qpool);
+    else
+        field = l6msg_alloc_field();
+        
+    field->mdlength = 1;
+
+    if (fid >= 0) 
+    {
+        field->fid = (short)fid;
+        msg->idgen += (field->fid + 1);
+        field->mdlength += 2;
+        if(!msg->htbl_fld_id)
+        {
+            l6_htbl_init(&(msg->htbl_fld_id), 
+                L6_MSG_ID_MAP_TYPE_INT, L6_MSG_ID_MAP_INIT_CAP);
+        }
+        l6_htbl_ikey_put(msg->htbl_fld_id, field->fid, field);
+    }
+
+    if(name != NULL)
+    {
+        field->namelen = namelen + 1;
+        if(field->namemem < field->namelen)
+        {
+            field->namemem = field->namelen;
+            field->name = (char*)realloc(field->name, field->namemem);
+        }
+        field->mdlength += (field->namelen + 1);    //strlen + 1 null byte + 1 byte length)
+        strncpy(field->name, name, namelen);
+        field->name[namelen] = '\0';
+
+        if(!msg->htbl_fld_name) 
+        {
+            l6_htbl_init(&(msg->htbl_fld_name), 
+                L6_MSG_ID_MAP_TYPE_STR, L6_MSG_NAME_MAP_INIT_CAP);
+        }
+        l6_htbl_skey_put(msg->htbl_fld_name, field->name, field);
+    }
+
+    field->type = type;
+
+    field->index = l6_mvec_size(msg->qfields);
+    l6_mvec_push(msg->qfields, field);
+
+    if(field->type == L6_DATATYPE_L6MSG) /* || (field->type == L6_DATATYPE_L6MSG_SERIALIZED)) */
+    {
+        if(msg->qsub_msgs == NULL)
+            l6_mvec_init(&(msg->qsub_msgs), sizeof(l6msg_field), 2);
+        l6_mvec_push(msg->qsub_msgs, field);
+    }
+
+    if(field->type & L6_FLAG_FIELD_IS_ARRAY)
+    {
+        field->mdlength += sizeof(int16_t);        //size of count of array elements = short
+    }
+    field->elem_size     =  length;
+    field->count         =  count;
+    field->datalen       =  field->elem_size * field->count;
+    field->total_size    =  field->mdlength  + field->datalen;
+
+    //TRACK_MSG_SIZE_CONTINUALLY does not apply here because this is also used during deserialization
+    msg->total_length    += field->total_size;
+    msg->metadata_length += field->mdlength;
+    msg->data_length     += field->datalen;
+
+    *pfield = field;
+    
+    if(data)
+    {
+        l6msg_field_type_handler *handler = get_field_type_handler(msg, field->type);
+        if(handler)
+            ret = handler->set_data(field, data, copy);
+        else
+            ret = -1;
+    }
+
+    return ret;
 }
 
 static int set_field_data_in_msg_ret(l6msg_struct *msg, l6msg_field **pfield,
@@ -1464,94 +1637,21 @@ static int set_field_data_in_msg_ret(l6msg_struct *msg, l6msg_field **pfield,
                 msg->data_length     += field->datalen;
             }
         }
+
+        if(data)
+        {
+            l6msg_field_type_handler *handler = get_field_type_handler(msg, field->type);
+            if(handler)
+                ret = handler->set_data(field, data, copy);
+            else
+                ret = -1;
+        }
     }
     else
     {
-        if(l6_mvec_size(msg->qfields) >= L6_MAX_NUM_FIELDS)
-        {
-            msg->error_code = L6_ERR_MAX_NUM_FIELDS_EXCEEDED;
-            if(_SET_DEBUG_INFO) sprintf_debug_info(msg, __LINE__, "nfields=%d", 
-                                                    l6_mvec_size(msg->qfields));
-            return -1;   
-        }
-        if(l6_mvec_size(msg->qpool))
-            field = (l6msg_field*)l6_mvec_pop(msg->qpool);
-        else
-            field = l6msg_alloc_field();
-            
-        field->mdlength = 1;
-
-        if (fid >= 0) 
-        {
-            field->fid = (short)fid;
-            msg->idgen += (field->fid + 1);
-            field->mdlength += 2;
-            if(!msg->htbl_fld_id)
-            {
-                l6_htbl_init(&(msg->htbl_fld_id), 
-                    L6_MSG_ID_MAP_TYPE_INT, L6_MSG_ID_MAP_INIT_CAP);
-            }
-            l6_htbl_ikey_put(msg->htbl_fld_id, field->fid, field);
-        }
-    
-    
-        if(name != NULL)
-        {
-            field->namelen = namelen + 1;
-            if(field->namemem < field->namelen)
-            {
-                field->namemem = field->namelen;
-                field->name = (char*)realloc(field->name, field->namemem);
-            }
-            field->mdlength += (field->namelen + 1);    //strlen + 1 null byte + 1 byte length)
-            strncpy(field->name, name, namelen);
-            field->name[namelen] = '\0';
-
-            if(!msg->htbl_fld_name) 
-            {
-                l6_htbl_init(&(msg->htbl_fld_name), 
-                    L6_MSG_ID_MAP_TYPE_STR, L6_MSG_NAME_MAP_INIT_CAP);
-            }
-            l6_htbl_skey_put(msg->htbl_fld_name, field->name, field);
-        }
-
-        field->type = type;
-
-        field->index = l6_mvec_size(msg->qfields);
-        l6_mvec_push(msg->qfields, field);
-    
-        if(field->type == L6_DATATYPE_L6MSG) /* || (field->type == L6_DATATYPE_L6MSG_SERIALIZED)) */
-        {
-            if(msg->qsub_msgs == NULL)
-                l6_mvec_init(&(msg->qsub_msgs), sizeof(l6msg_field), 2);
-            l6_mvec_push(msg->qsub_msgs, field);
-        }
-    
-        if(field->type & L6_FLAG_FIELD_IS_ARRAY)
-        {
-            field->mdlength += sizeof(int16_t);        //size of count of array elements = short
-        }
-        field->elem_size     =  length;
-        field->count         =  count;
-        field->datalen       =  field->elem_size * field->count;
-        field->total_size    =  field->mdlength  + field->datalen;
-
-        //TRACK_MSG_SIZE_CONTINUALLY does not apply here because this is also used during deserialization
-        msg->total_length    += field->total_size;
-        msg->metadata_length += field->mdlength;
-        msg->data_length     += field->datalen;
-
-        *pfield = field;
+        ret = add_field_data_in_msg_ret(msg, pfield, name, namelen, fid, type, data, length, count, copy);
     }
 
-    if(data)
-    {
-        l6msg_field_type_handler *handler = get_field_type_handler(msg, field->type);
-        if(handler)
-            ret = handler->set_data(field, data, copy);
-        else
-            ret = -1;
-    }
     if(ret != 0) 
     {
         //l6msg_free_field(field);
@@ -2388,9 +2488,9 @@ int l6msg_init(l6msg *lmsg)
     
     msg->debug              = NULL;
     
-    msg->htbl_fld_name      = NULL; //initialize these lazily
-    msg->htbl_fld_id        = NULL; //so that user doesn't pay if they're never used
-    msg->qsub_msgs          = NULL;
+    msg->htbl_fld_name      = NULL; //initialize these lazily,
+    msg->htbl_fld_id        = NULL; //so that user doesn't pay 
+    msg->qsub_msgs          = NULL; //if they're never used.
 
     l6_mvec_init(&(msg->qfields),   sizeof(l6msg_field), L6_MSG_LIST_INIT_CAP);
     l6_mvec_init(&(msg->qpool),     sizeof(l6msg_field), L6_MSG_LIST_INIT_CAP);
@@ -3020,25 +3120,395 @@ int l6msg_is_field_array_at_index(l6msg *lmsg, int index)
     return ret;
 }
 
-//VARARGS get/set convenience methods
-int l6msg_setf(l6msg *lmsg, const char *fmt, ...)
+/******************* CONVENIENCE VARIADIC GET/SET DATA FUNCTIONS *************************/
+//convenience varargs functions to get/set multiple fields in a single method call
+//fmt format closely follows JSON
+
+int l6msg_parse_field(l6msg_struct *msg, va_list va, int is_set, int do_copy, int type, int is_unsigned, 
+    int is_long, int is_array, int field_id, char *field_name, int field_idn_len, int *field_index) 
 {
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    msg->error_code = L6_ERR_NOT_IMPLEMENTED;
-    if(_SET_DEBUG_INFO) 
-        sprintf_debug_info(msg, __LINE__, 
-            "VARARGS set/get not yet implemented");
-    return -1;
+    /*printf("\nset/get %d field of type = %d is_unsigned=%d is_long=%d is_array=%d id=%d name=%s namelen=%d\n", 
+            is_set, type, is_unsigned, is_long, is_array, field_id, field_name, field_idn_len);*/
+    if(type < 0) 
+    {
+        return -1;
+    }
+
+    int ret = 0;
+    //probably end of type specifier, go ahead and set/get field
+    if(is_set)
+    {
+        void *data = NULL;
+        int count  = 1;
+        int length = l6_field_type_handlers[type].element_size_bytes;
+        l6_data_type dtype;
+
+        switch(type) 
+        {
+        case L6_DATATYPE_UINT8:
+            dtype.uc = (uint8_t)va_arg(va, int);
+            data = &(dtype.uc);
+            break;
+        case L6_DATATYPE_INT8:
+            dtype.c = (int8_t)va_arg(va, int);
+            data = &(dtype.c);
+            break;
+        case L6_DATATYPE_UINT16:
+            dtype.us = (uint16_t)va_arg(va, int);
+            data = &(dtype.us);
+            break;
+        case L6_DATATYPE_INT16:
+            dtype.s = (int16_t)va_arg(va, int);
+            data = &(dtype.s);
+            break;
+        case L6_DATATYPE_UINT32:
+            dtype.ui = va_arg(va, uint32_t);
+            data = &(dtype.ui);
+            break;
+        case L6_DATATYPE_INT32:
+            dtype.i = va_arg(va, int32_t);
+            data = &(dtype.i);
+            break;
+        case L6_DATATYPE_UINT64:
+            dtype.ul = va_arg(va, uint64_t);
+            data = &(dtype.ul);
+            break;
+        case L6_DATATYPE_INT64:
+            dtype.l = va_arg(va, int64_t);
+            data = &(dtype.l);
+            break;
+        case L6_DATATYPE_FLOAT:
+            dtype.f = (float)va_arg(va, double);
+            data = &(dtype.f);
+            break;
+        case L6_DATATYPE_DOUBLE:
+            dtype.d = va_arg(va, double);
+            data = &(dtype.d);
+            break;
+        case L6_DATATYPE_STRING:
+            dtype.ptr = va_arg(va, char *);
+            data = dtype.ptr;
+            count = strlen(dtype.ptr) + 1;
+            break;
+        case L6_DATATYPE_UINT8_ARRAY:
+            dtype.uca = va_arg(va, uint8_t *);
+            data = (dtype.uca);
+            break;
+        case L6_DATATYPE_INT8_ARRAY:
+            dtype.ptr = va_arg(va, char *);
+            data = (dtype.ptr);
+            break;
+        case L6_DATATYPE_UINT16_ARRAY:
+            dtype.usa = va_arg(va, uint16_t *);
+            data = (dtype.usa);
+            break;
+        case L6_DATATYPE_INT16_ARRAY:
+            dtype.sa = va_arg(va, int16_t *);
+            data = (dtype.sa);
+            break;
+        case L6_DATATYPE_UINT32_ARRAY:
+            dtype.uia = va_arg(va, uint32_t *);
+            data = (dtype.uia);
+            break;
+        case L6_DATATYPE_INT32_ARRAY:
+            dtype.ia = va_arg(va, int32_t *);
+            data = (dtype.ia);
+            break;
+        case L6_DATATYPE_UINT64_ARRAY:
+            dtype.ula = va_arg(va, uint64_t *);
+            data = (dtype.ula);
+            break;
+        case L6_DATATYPE_INT64_ARRAY:
+            dtype.la = va_arg(va, int64_t *);
+            data = (dtype.la);
+            break;
+        case L6_DATATYPE_FLOAT_ARRAY:
+            dtype.fa = va_arg(va, float *);
+            data = (dtype.fa);
+            break;
+        case L6_DATATYPE_DOUBLE_ARRAY:
+            dtype.da = va_arg(va, double *);
+            data = (dtype.da);
+            break;
+        case L6_DATATYPE_L6MSG:
+            dtype.msg = *(va_arg(va, l6msg *));
+            data = dtype.msg;
+            break;
+        }
+        if(is_array && (type != L6_DATATYPE_STRING))
+        {
+            count = va_arg(va, int);
+        }
+        l6msg_field *field = NULL;
+        ret = set_field_data_in_msg_ret(msg, &field, field_name, 
+                    field_idn_len, field_id, -1, type, data, length, count, do_copy);
+        (*field_index)++;
+    }
+    else 
+    {
+        void *data = va_arg(va, void *);
+        int fcount;
+        int *pcount = &fcount;
+        int length = l6_field_type_handlers[type].element_size_bytes;
+        int count = -1;
+        int offset = 0;
+        void **pdata = &data;
+        if(is_array)
+        {
+            if(do_copy)
+            {
+                count = va_arg(va, int);   
+            }
+            else 
+            {
+                pdata  = data;    
+                pcount = va_arg(va, int *);
+            }
+        }
+        
+        char *fname = NULL;
+        if(field_name)
+        {
+            fname = (char*)malloc(field_idn_len + 1);
+            strncpy(fname, field_name, field_idn_len);
+            fname[field_idn_len] = '\0';
+        }
+
+        ret = find_get_ret_field_data_in_msg(msg, fname, field_id, 
+                (fname || (field_id >= 0) ? -1 : (*field_index)), type, pdata, length, offset, count, pcount);
+        if(fname) free(fname);
+        (*field_index)++;
+    }
+    return ret;
 }
 
-int l6msg_getf(l6msg *lmsg, const char *fmt, ...)
+int l6msg_parse_fmt(l6msg *lmsg, int copy, int is_set, char *fmt, va_list va)
 {
-    l6msg_struct *msg = (l6msg_struct*)(*lmsg);
-    msg->error_code = L6_ERR_NOT_IMPLEMENTED;
-    if(_SET_DEBUG_INFO) 
-        sprintf_debug_info(msg, __LINE__, 
-            "VARARGS set/get not yet implemented");
-    return -1;
+    char ch;
+ 	l6msg_struct *msg = (l6msg_struct*)(*lmsg);
+    int ret = 0;
+    enum parse_state {
+        FIELD_NONE,             // 0
+        FIELD_ID,               // 1
+        FIELD_NAME,             // 2
+        FIELD_ID_OR_NAME_ENDED, // 3
+        FIELD_TYPE_EXPECTED,    // 4
+        FIELD_TYPE,             // 5
+        FIELD_RESET             // 6
+    }; 
+    enum parse_state state = FIELD_NONE;
+    int is_unsigned = 0;
+    int is_array = 0;
+    int is_long = 0;
+    int is_ref = 0;
+    int type = -1;
+    int field_idn_len = 0;
+    char *field_idn_start = NULL;
+    int field_index = 0;
+    int field_id = -1;
+    char *field_name = NULL;
+
+    while ((ch = *(fmt++))) {        
+        //printf("%c/%d ", ch, state);
+        switch(state) {
+        case FIELD_NONE:
+            if (ch == '%')
+                state = FIELD_TYPE;     //new field type encountered
+            else if(ch == '\'')
+            {
+                field_name = field_idn_start = fmt;
+                state = FIELD_NAME;     //new field name encountered
+            }
+            else if(isdigit(ch))
+            {
+                field_idn_start = (fmt - 1);
+                state = FIELD_ID;     //new field ID encountered
+                field_idn_len++;
+            }
+            //else unsupported character, drop it
+            break;
+
+        case FIELD_NAME:
+            if((ch == '\'') && (*(fmt - 1) != '\\')) //check if escaped single quote
+            {
+                //end field name here
+                state = FIELD_ID_OR_NAME_ENDED;
+            }
+            else
+            {
+                field_idn_len++;
+            }
+            break;
+
+
+        case FIELD_ID:
+            if(!isdigit(ch))
+            {
+                //end field id here
+                char *tmp = malloc(field_idn_len + 1);
+                strncpy(tmp, field_idn_start, field_idn_len);
+                tmp[field_idn_len] = '\0';
+                field_id = strtol(tmp, NULL, 10);
+                free(tmp);
+                fmt--;  //move back in case we have an = or ":" sign here
+                field_idn_start = NULL;
+                state = FIELD_ID_OR_NAME_ENDED;
+            }
+            else
+            {
+                field_idn_len++;
+            }
+            break;
+
+        case FIELD_ID_OR_NAME_ENDED:
+            //allow only spaces, equal or colon before field type shows up
+            if(ch != ' ')
+            {
+                if((ch != ':') && (ch != '='))
+                {
+                    state = FIELD_RESET;
+                    fmt--;
+                }
+                else
+                {
+                    state = FIELD_TYPE_EXPECTED;//waiting for field type
+                }
+            }
+            break;
+
+        case FIELD_TYPE_EXPECTED:
+            if(ch != ' ')
+            {
+                if(ch != '%')
+                {
+                    state = FIELD_RESET;
+                    fmt--;
+                }
+                else
+                {
+                    state = FIELD_TYPE; //waiting for field type
+                }
+            }
+            break;
+
+        case FIELD_TYPE:
+            switch(ch) 
+            {
+            case 'u':
+                is_unsigned = 1;
+                break;
+            case 'l':
+                is_long = 1;
+                break;
+            case 'p':
+                if(is_unsigned)
+                    type = L6_DATATYPE_UINT8;
+                else
+                    type = L6_DATATYPE_INT8;
+                break;
+            case 'd':
+                if(is_long)
+                    if(is_unsigned)
+                        type = L6_DATATYPE_UINT64;
+                    else
+                        type = L6_DATATYPE_INT64;
+                else
+                    if(is_unsigned)
+                        type = L6_DATATYPE_UINT32;
+                    else
+                        type = L6_DATATYPE_INT32;
+                break;
+            case 'f':
+                if(is_long)
+                    type = L6_DATATYPE_DOUBLE;  //treat double as "long float"
+                else
+                    type = L6_DATATYPE_FLOAT;
+                break;
+            case 'F':
+                type = L6_DATATYPE_DOUBLE;
+                break;
+            case 'm':
+                type = L6_DATATYPE_L6MSG;
+                break;
+            case 'h':
+                if(is_unsigned)
+                    type = L6_DATATYPE_UINT16;
+                else
+                    type = L6_DATATYPE_INT16;
+                break;
+            case 'c':
+                if(is_unsigned)
+                    type = L6_DATATYPE_UINT8;
+                else
+                    type = L6_DATATYPE_INT8;
+                break;
+            case 's':
+                type = L6_DATATYPE_STRING;
+                break;
+            case '[':
+                if(*(fmt) != ']') 
+                {
+                    //poorly formatted string, drop this
+                    state = FIELD_RESET;
+                    fmt--;
+                    break;
+                }
+           case ']':
+                type |= L6_FLAG_FIELD_IS_ARRAY;
+                is_array = 1;
+
+           /*case '*':
+                is_ref = 1;*/
+           case ' ':
+           case ',':
+           default:
+                ret = l6msg_parse_field(msg, va, is_set, (copy | is_ref), type, is_unsigned, 
+                            is_long, is_array, field_id, field_name, field_idn_len, &field_index);
+                if(ret < 0) 
+                {
+                    return ret;
+                }
+
+                fmt--;
+                state = FIELD_RESET;
+            }
+            break;
+
+        case FIELD_RESET:
+            state = FIELD_NONE; //invalid format, drop it
+            field_idn_len = is_ref = is_long = is_unsigned = is_array = type = 0;
+            field_idn_start = field_name = NULL;
+            type = field_id = -1;
+            break;
+        }
+    }
+
+    //check for any left-over field parsing that got interrupted by end-of-string
+    if(state == FIELD_TYPE)
+    {
+        ret = l6msg_parse_field(msg, va, is_set, (copy | is_ref), type, is_unsigned, 
+                    is_long, is_array, field_id, field_name, field_idn_len, &field_index);
+    }
+    
+    return ret;
+}
+
+int l6msg_setf(l6msg *msg, char *fmt, ...)
+{
+    va_list va;
+    va_start(va,fmt);
+    int ret = l6msg_parse_fmt(msg, 0, 1, fmt, va);
+    va_end(va);
+    return ret;
+}
+
+int l6msg_getf(l6msg *msg, char *fmt, ...)
+{
+    va_list va;
+    va_start(va,fmt);
+    int ret = l6msg_parse_fmt(msg, 0, 0, fmt, va);
+    va_end(va);
+    return ret;
 }
 
 
@@ -3057,7 +3527,7 @@ int l6msg_##SETADD##BYREFORVAL##_##TYPENAME##ACCESS##(l6msg *lmsg, __CONCAT(KEYT
 DEF_SET_FIELD_VAL(add, byte, L6_DATATYPE_BYTE, char, 1,,,,, -1)
 */
 
-//Maybe auto-generated code
+/******* Auto-generated code - do not mess with unless absolutely necessary, fix codegen instead ************/
 
 int l6msg_set_int16(l6msg *lmsg, int fid, int16_t data)
 {
@@ -3639,7 +4109,7 @@ int l6msg_set_double_array_ptr_named(l6msg *lmsg, _const_char *key, double *data
 {
     l6msg_struct *msg = (l6msg_struct*)(*lmsg);
     return set_field_data_in_msg_named(msg, key,  
-                L6_DATATYPE_DOUBLE_ARRAY, &data, sizeof(double), count, 0);
+                L6_DATATYPE_DOUBLE_ARRAY, data, sizeof(double), count, 0);
 }
 
 int l6msg_set_layer6_msg_ptr_named(l6msg *lmsg, _const_char *key, l6msg *data)
