@@ -158,14 +158,10 @@ class Layer6Test(SocketServer.BaseRequestHandler):
             print ("int, ")
             msg.set_int(2, -23)
             
-            print ("long, ")
-            msg.set_long_named("l", long(3847))
-            
-            print ("float, ")
-            msg.set_float_named("float", 39.31)
-            
-            print ("double, ")
-            msg.add_double(1278.409823)
+            print ("long, float, double ")
+            msg.set_long_named("l", long(3847))\
+                .set_float_named("float", 39.31)\
+                .add_double(1278.409823)
 
             print ("overwrite float, ")
             msg.set_float_at_index(3, 49.312);
@@ -181,9 +177,9 @@ class Layer6Test(SocketServer.BaseRequestHandler):
             
             print ("submsg... ")
             sub_msg = Layer6Msg()
-            sub_msg.set_string_named("sub-f1", "sub msg field 1")
-            sub_msg.set_string_ptr(5,"sub msg field 2!")
-            sub_msg.set_string_ptr_named("temp", "I'm just gonna get deleted in a few lines...")
+            sub_msg.set_string_named("sub-f1", "sub msg field 1") \
+                .set_string_ptr(5,"sub msg field 2!") \
+                .set_string_ptr_named("temp", "I'm just gonna get deleted in a few lines...")
 
             msg.set_layer6_msg_ptr_named("sub", sub_msg)
 
@@ -197,9 +193,9 @@ class Layer6Test(SocketServer.BaseRequestHandler):
             
             if add_subsubmsg:
                 sub_submsg = Layer6Msg()
-                sub_submsg.set_short_array_named("short-array", [1, 3, 4, 5])
-                sub_submsg.set_string_named("sub-sub-key1", "qwerty")
-                sub_submsg.set_string_named("yowzah", "Lorem ipsum dolor sit amet.")
+                sub_submsg.set_short_array_named("short-array", [1, 3, 4, 5])\
+                    .set_string_named("sub-sub-key1", "qwerty")\
+                    .set_string_named("yowzah", "Lorem ipsum dolor sit amet.")
                 sub_msg.set_layer6_msg_ptr_named("subsub", sub_submsg)
                 
                 sub_submsg_temp = Layer6Msg()

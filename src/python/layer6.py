@@ -470,7 +470,7 @@ class Layer6Msg:
         #else:  # for some weird reason, this else clause never executes... Python bug?
         #    field.data = data
 
-        return field
+        return self
     
     def __get_field_data_in_msg(self, name, fid, index, ftype, length, offset, count, b_deepcopy=0):
         field = None
@@ -1326,8 +1326,8 @@ class Layer6Msg:
         #iterate thru fields and set
         for field in self.qfields:
             #self.debug_field(field)
-            retfield = msg2.__set_field_data_in_msg(field.name, field.fid, -1, field.ftype, field.data, field.length, field.count, msg2.deep_copy_default)
-            if(retfield == None):
+            ret = msg2.__set_field_data_in_msg(field.name, field.fid, -1, field.ftype, field.data, field.length, field.count, msg2.deep_copy_default)
+            if(ret == None):
                 #some error in copying
                 return None
         return msg2
