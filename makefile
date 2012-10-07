@@ -3,7 +3,7 @@
 # Makes layer6
 #
 
-CFLAGS  = -O3 -Wall
+CFLAGS  = -O3 -Wall -save-temps
 #CFLAGS  = -g -Wall  #uncomment for debugging
 LDFLAGS = -shared -fPIC
 LDFLAGS = -shared -fPIC
@@ -44,6 +44,8 @@ layer6.o:
 layer6cpp.o:
 	$(CPPC) $(CFLAGS) -o $(OBJDIR)/layer6cpp.o -c $(SRCDIR)/layer6.cpp $(INCLUDE)
 
+layer6.s:
+	$(CC) -O3 -g -Wa,-adhls -o $(OBJDIR)/layer6tmp.o  -c $(SRCDIR)/layer6.c  $(INCLUDE) > $(OBJDIR)/layer6.s
 #********************************* CLEAN ********************************
 clean:
 	rm -f $(BINDIR)/l6test $(BINDIR)/l6testcpp $(BINDIR)/*.exe $(BINDIR)/*.dll $(BINDIR)/*.so $(BINDIR)/*.dylib $(OBJDIR)/*.o 
